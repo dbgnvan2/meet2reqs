@@ -1240,15 +1240,27 @@ def process_transcript(
                 results["enriched_requirements"] = enriched
                 enrichment_pipeline.save_enriched_requirements(enriched, stem, logger)
 
+        # --- STEP 7: Validate Extractions ---
+        logger.info("\n--- STEP 7: Validating Extractions ---")
+        from validation_pipeline import validate_extraction
+        validation_report = validate_extraction(
+            base_name=stem,
+            extraction_results=results,
+            logger=logger,
+        )
+        results["validation"] = validation_report
+
         # --- Summary ---
         logger.info("\n" + "=" * 60)
-        logger.info("MEET2REQS: Extraction Complete")
+        logger.info("MEET2REQS: Processing Complete")
         logger.info("  Requirements:  %d", len(results["requirements"]))
         if results.get("enriched_requirements"):
             logger.info("  Enriched:      %d (with acceptance criteria)", len(results["enriched_requirements"]))
         logger.info("  Action Items:  %d", len(results["action_items"]))
         logger.info("  Decisions:     %d", len(results["decisions"]))
         logger.info("  Emphasis:      %d", len(results["emphasis_points"]))
+        rec = validation_report.get("overall", {}).get("recommendation", "n/a")
+        logger.info("  Validation:    %s", rec.upper())
         logger.info("=" * 60)
 
         return results

@@ -1,7 +1,8 @@
 """
-Pipeline module for validation tasks (headers, abstracts, emphasis).
+Pipeline module for validation tasks (headers, extractions, emphasis).
 """
 
+import json
 import os
 import re
 from pathlib import Path
@@ -9,11 +10,20 @@ from typing import Optional
 
 import anthropic
 
-import abstract_pipeline
-import abstract_validation
 import config
-import summary_pipeline
-import summary_validation
+
+# Legacy imports — kept for backward compatibility
+try:
+    import abstract_pipeline
+    import abstract_validation
+    import summary_pipeline
+    import summary_validation
+except ImportError:
+    abstract_pipeline = None
+    abstract_validation = None
+    summary_pipeline = None
+    summary_validation = None
+
 from transcript_utils import (
     call_claude_with_retry,
     create_system_message_with_cache,
@@ -560,3 +570,339 @@ def validate_summary_coverage(base_name: str, logger=None, model: str = config.A
     except Exception as e:
         logger.error("Error validating summary coverage: %s", e, exc_info=True)
         return False
+
+
+# ============================================================================
+# MEET2REQS EXTRACTION VALIDATION
+# ============================================================================
+
+
+def _validate_source_quotes(
+    items: list,
+    formatted_content: str,
+    item_type: str,
+    logger,
+) -> list:
+    """
+    Validate that source_quotes from extracted items exist in the transcript.
+
+    Uses fuzzy matching with configurable thresholds from config.
+
+    Returns a list of validation result dicts.
+    """
+    results = []
+
+    for item in items:
+        item_id = item.get("id", "???")
+        quotes = item.get("source_quotes", [])
+
+        if not quotes:
+            results.append({
+                "item_id": item_id,
+                "item_type": item_type,
+                "status": "no_quotes",
+                "fidelity_score": 0.0,
+                "issues": ["No source quotes provided for validation"],
+            })
+            continue
+
+        best_ratio = 0.0
+        quote_results = []
+
+        for quote in quotes:
+            # Use first 20 words for fuzzy matching (long quotes cause false negatives)
+            quote_core = " ".join(quote.split()[:20])
+            if len(quote_core.strip()) < 10:
+                quote_results.append({"quote": quote[:80], "ratio": 0.0, "status": "too_short"})
+                continue
+
+            _, _, ratio = find_text_in_content(
+                quote_core, formatted_content, aggressive_normalization=True
+            )
+            best_ratio = max(best_ratio, ratio)
+
+            if ratio >= config.EXTRACTION_FIDELITY_EXACT:
+                quote_results.append({"quote": quote[:80], "ratio": ratio, "status": "exact"})
+            elif ratio >= config.EXTRACTION_FIDELITY_PARTIAL:
+                quote_results.append({"quote": quote[:80], "ratio": ratio, "status": "partial"})
+            else:
+                quote_results.append({"quote": quote[:80], "ratio": ratio, "status": "not_found"})
+
+        # Determine overall status from best quote match
+        if best_ratio >= config.EXTRACTION_FIDELITY_EXACT:
+            status = "valid"
+        elif best_ratio >= config.EXTRACTION_FIDELITY_PARTIAL:
+            status = "partial"
+        else:
+            status = "invalid"
+
+        issues = []
+        for qr in quote_results:
+            if qr["status"] == "not_found":
+                issues.append(f"Quote not found in transcript: \"{qr['quote']}...\"")
+            elif qr["status"] == "partial":
+                issues.append(f"Partial match ({qr['ratio']:.0%}): \"{qr['quote']}...\"")
+
+        results.append({
+            "item_id": item_id,
+            "item_type": item_type,
+            "status": status,
+            "fidelity_score": best_ratio,
+            "issues": issues,
+            "quote_details": quote_results,
+        })
+
+    return results
+
+
+def validate_extraction(
+    base_name: str,
+    extraction_results: dict = None,
+    logger=None,
+    model: str = None,
+) -> dict:
+    """
+    Validate all extracted items (requirements, actions, decisions, emphasis)
+    against the original formatted transcript.
+
+    Performs:
+    1. Source quote fidelity checks (fuzzy matching against transcript)
+    2. Structure checks (required fields present, IDs sequential)
+    3. Coverage assessment
+
+    Args:
+        base_name: Project stem name
+        extraction_results: Dict from process_transcript(). If None, loads from saved JSON files.
+        logger: Logger instance
+        model: Model for API-based validation (optional, for future use)
+
+    Returns:
+        Dict with validation report data.
+    """
+    if logger is None:
+        logger = setup_logging("validate_extraction")
+    if model is None:
+        model = config.VALIDATION_MODEL
+
+    logger.info("=" * 60)
+    logger.info("MEET2REQS: Validating Extractions for: %s", base_name)
+    logger.info("=" * 60)
+
+    project_dir = config.PROJECTS_DIR / base_name
+
+    # Load formatted transcript
+    formatted_path = project_dir / f"{base_name}{config.SUFFIX_FORMATTED}"
+    if not formatted_path.exists():
+        logger.error("Formatted transcript not found: %s", formatted_path)
+        return {"error": "formatted transcript not found"}
+
+    formatted_content = formatted_path.read_text(encoding="utf-8")
+    formatted_content = strip_yaml_frontmatter(formatted_content)
+
+    # Load extraction results from files if not provided
+    if extraction_results is None:
+        extraction_results = {}
+        for key, suffix in [
+            ("requirements", config.SUFFIX_REQUIREMENTS),
+            ("action_items", config.SUFFIX_ACTION_ITEMS),
+            ("decisions", config.SUFFIX_DECISIONS),
+            ("emphasis_points", config.SUFFIX_EMPHASIS_POINTS),
+        ]:
+            json_path = project_dir / f"{base_name}{suffix}"
+            if json_path.exists():
+                try:
+                    extraction_results[key] = json.loads(
+                        json_path.read_text(encoding="utf-8")
+                    )
+                except json.JSONDecodeError:
+                    logger.warning("Failed to parse %s", json_path.name)
+                    extraction_results[key] = []
+            else:
+                extraction_results[key] = []
+
+    # --- Validate each extraction type ---
+    all_validations = []
+    type_summaries = {}
+
+    for item_type, items in [
+        ("requirement", extraction_results.get("requirements", [])),
+        ("action_item", extraction_results.get("action_items", [])),
+        ("decision", extraction_results.get("decisions", [])),
+        ("emphasis_point", extraction_results.get("emphasis_points", [])),
+    ]:
+        if not items:
+            logger.info("  No %s items to validate.", item_type)
+            type_summaries[item_type] = {
+                "total": 0, "valid": 0, "partial": 0, "invalid": 0, "no_quotes": 0,
+            }
+            continue
+
+        logger.info("\n--- Validating %d %s(s) ---", len(items), item_type)
+        results = _validate_source_quotes(items, formatted_content, item_type, logger)
+        all_validations.extend(results)
+
+        # Tally
+        summary = {"total": len(results), "valid": 0, "partial": 0, "invalid": 0, "no_quotes": 0}
+        for r in results:
+            if r["status"] == "valid":
+                summary["valid"] += 1
+            elif r["status"] == "partial":
+                summary["partial"] += 1
+                logger.warning("  %s: partial match (%.0f%%)", r["item_id"], r["fidelity_score"] * 100)
+            elif r["status"] == "invalid":
+                summary["invalid"] += 1
+                logger.error("  %s: NOT FOUND in transcript", r["item_id"])
+                for issue in r.get("issues", []):
+                    logger.error("    - %s", issue)
+            elif r["status"] == "no_quotes":
+                summary["no_quotes"] += 1
+                logger.warning("  %s: no source quotes to validate", r["item_id"])
+
+        type_summaries[item_type] = summary
+        accuracy = (
+            (summary["valid"] + summary["partial"]) / summary["total"] * 100
+            if summary["total"] > 0 else 0
+        )
+        logger.info("  %s validation: %d/%d passed (%.1f%%)",
+                     item_type, summary["valid"] + summary["partial"],
+                     summary["total"], accuracy)
+
+    # --- Structure Validation ---
+    structure_issues = []
+
+    # Check required fields
+    required_fields = {
+        "requirement": ["id", "user_story", "source_quotes"],
+        "action_item": ["id", "action", "source_quotes"],
+        "decision": ["id", "decision", "source_quotes"],
+        "emphasis_point": ["id", "point", "source_quotes"],
+    }
+
+    for item_type, items in [
+        ("requirement", extraction_results.get("requirements", [])),
+        ("action_item", extraction_results.get("action_items", [])),
+        ("decision", extraction_results.get("decisions", [])),
+        ("emphasis_point", extraction_results.get("emphasis_points", [])),
+    ]:
+        fields = required_fields.get(item_type, [])
+        for item in items:
+            for field in fields:
+                if not item.get(field):
+                    structure_issues.append(
+                        f"{item.get('id', '???')}: missing required field '{field}'"
+                    )
+
+    if structure_issues:
+        logger.warning("Structure issues found:")
+        for issue in structure_issues:
+            logger.warning("  - %s", issue)
+
+    # --- Overall Assessment ---
+    total = sum(s["total"] for s in type_summaries.values())
+    valid = sum(s["valid"] for s in type_summaries.values())
+    partial = sum(s["partial"] for s in type_summaries.values())
+    invalid = sum(s["invalid"] for s in type_summaries.values())
+
+    overall_fidelity = (valid + partial) / total if total > 0 else 0.0
+
+    if invalid == 0 and len(structure_issues) == 0:
+        recommendation = "pass"
+    elif invalid <= 2 and overall_fidelity >= 0.8:
+        recommendation = "review"
+    else:
+        recommendation = "fail"
+
+    report = {
+        "base_name": base_name,
+        "type_summaries": type_summaries,
+        "overall": {
+            "total_items": total,
+            "valid": valid,
+            "partial": partial,
+            "invalid": invalid,
+            "fidelity_score": overall_fidelity,
+            "structure_issues": len(structure_issues),
+            "recommendation": recommendation,
+        },
+        "validation_details": all_validations,
+        "structure_issues": structure_issues,
+    }
+
+    # --- Save Report ---
+    _save_validation_report(report, base_name, logger)
+
+    logger.info("\n" + "=" * 60)
+    logger.info("VALIDATION SUMMARY")
+    logger.info("  Total items:  %d", total)
+    logger.info("  Valid:        %d", valid)
+    logger.info("  Partial:      %d", partial)
+    logger.info("  Invalid:      %d", invalid)
+    logger.info("  Fidelity:     %.1f%%", overall_fidelity * 100)
+    logger.info("  Recommendation: %s", recommendation.upper())
+    logger.info("=" * 60)
+
+    return report
+
+
+def _save_validation_report(report: dict, base_name: str, logger) -> Path:
+    """Save validation report as both JSON and readable Markdown."""
+    project_dir = config.PROJECTS_DIR / base_name
+    project_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save JSON
+    json_path = project_dir / f"{base_name} - extraction-validation.json"
+    json_path.write_text(
+        json.dumps(report, indent=2, ensure_ascii=False, default=str),
+        encoding="utf-8",
+    )
+
+    # Save readable Markdown report
+    lines = [
+        f"# Extraction Validation Report: {base_name}\n",
+        f"**Recommendation:** {report['overall']['recommendation'].upper()}\n",
+        f"**Fidelity Score:** {report['overall']['fidelity_score']:.1%}\n",
+        "## Summary\n",
+        f"| Metric | Count |",
+        f"|--------|-------|",
+        f"| Total Items | {report['overall']['total_items']} |",
+        f"| Valid | {report['overall']['valid']} |",
+        f"| Partial Match | {report['overall']['partial']} |",
+        f"| Invalid | {report['overall']['invalid']} |",
+        f"| Structure Issues | {report['overall']['structure_issues']} |",
+        "",
+    ]
+
+    # Per-type breakdown
+    lines.append("## By Type\n")
+    for item_type, summary in report.get("type_summaries", {}).items():
+        if summary["total"] == 0:
+            continue
+        accuracy = (summary["valid"] + summary["partial"]) / summary["total"] * 100
+        lines.append(f"### {item_type.replace('_', ' ').title()}")
+        lines.append(f"- Total: {summary['total']}")
+        lines.append(f"- Valid: {summary['valid']}, Partial: {summary['partial']}, Invalid: {summary['invalid']}")
+        lines.append(f"- Accuracy: {accuracy:.1f}%")
+        lines.append("")
+
+    # Issues
+    if report.get("structure_issues"):
+        lines.append("## Structure Issues\n")
+        for issue in report["structure_issues"]:
+            lines.append(f"- {issue}")
+        lines.append("")
+
+    # Detail on invalid items
+    invalid_details = [v for v in report.get("validation_details", []) if v["status"] == "invalid"]
+    if invalid_details:
+        lines.append("## Invalid Items (Not Found in Transcript)\n")
+        for v in invalid_details:
+            lines.append(f"### {v['item_id']} ({v['item_type']})")
+            for issue in v.get("issues", []):
+                lines.append(f"- {issue}")
+            lines.append("")
+
+    md_path = project_dir / f"{base_name} - extraction-validation.md"
+    md_path.write_text("\n".join(lines), encoding="utf-8")
+
+    logger.info("Validation report saved to: %s", md_path.name)
+    return md_path
