@@ -1,0 +1,105 @@
+{
+  "acceptance_criteria_patterns": {
+    "description": "Given-When-Then patterns for common requirement types, based on Agile best practices from Atlassian, AltexSoft, and EasyAgile.",
+    "patterns": {
+      "data_handling": [
+        {
+          "given": "a user provides [input data]",
+          "when": "the system processes the [input data]",
+          "then": "the [input data] is stored/transformed according to [business rule]"
+        },
+        {
+          "given": "[data type] exists in the system",
+          "when": "a user requests to view/export the [data type]",
+          "then": "the system displays/exports the [data type] in [expected format]"
+        }
+      ],
+      "user_interaction": [
+        {
+          "given": "a user is on the [page/screen/interface]",
+          "when": "the user performs [action]",
+          "then": "the system responds with [expected behavior] within [timeframe if applicable]"
+        },
+        {
+          "given": "a user has [precondition/role/permission]",
+          "when": "the user attempts to [action]",
+          "then": "the system [allows/prevents] the action and [shows confirmation/error]"
+        }
+      ],
+      "integration": [
+        {
+          "given": "[external system] is available",
+          "when": "the system sends/receives [data] to/from [external system]",
+          "then": "the [data] is correctly transmitted and [acknowledgment/response] is received"
+        },
+        {
+          "given": "[external system] is unavailable",
+          "when": "the system attempts to communicate with [external system]",
+          "then": "the system handles the failure gracefully with [fallback behavior]"
+        }
+      ],
+      "reporting": [
+        {
+          "given": "[data set] has been collected over [time period]",
+          "when": "a user generates a [report type]",
+          "then": "the report includes [expected metrics/fields] and is available in [format]"
+        }
+      ],
+      "access_control": [
+        {
+          "given": "a user with [role] is authenticated",
+          "when": "the user attempts to access [resource/feature]",
+          "then": "the system [grants/denies] access based on [permission rules]"
+        }
+      ],
+      "notification": [
+        {
+          "given": "[event/condition] occurs",
+          "when": "the system detects the [event/condition]",
+          "then": "the system notifies [stakeholder/role] via [channel] within [timeframe]"
+        }
+      ],
+      "workflow": [
+        {
+          "given": "a [process/task] is in [state]",
+          "when": "[trigger/action] occurs",
+          "then": "the [process/task] transitions to [new state] and [side effects]"
+        }
+      ]
+    }
+  },
+  "functional_requirement_patterns": {
+    "description": "System must patterns for common requirement categories.",
+    "patterns": {
+      "data_validation": "The system must validate [input] against [rules] before [processing step].",
+      "data_persistence": "The system must persist [data type] in [storage] with [retention policy].",
+      "performance": "The system must complete [operation] within [time limit] under [load conditions].",
+      "error_handling": "The system must handle [error condition] by [recovery action] and [notification].",
+      "audit_trail": "The system must log [action/event] with [details] for [audit purpose].",
+      "data_integrity": "The system must ensure [data] remains consistent when [concurrent operation] occurs.",
+      "accessibility": "The system must provide [feature] that is accessible to [user group].",
+      "compliance": "The system must comply with [standard/regulation] when [handling data/performing action]."
+    }
+  },
+  "invest_checklist": {
+    "description": "INVEST quality checklist for user story validation.",
+    "criteria": {
+      "independent": "The story can be developed and delivered independently of other stories.",
+      "negotiable": "The story captures intent and leaves room for discussion on implementation.",
+      "valuable": "The story delivers clear, identifiable value to users or stakeholders.",
+      "estimable": "The story is specific enough for the team to estimate effort.",
+      "small": "The story is small enough to be completed within a single iteration.",
+      "testable": "The story has clear acceptance criteria that can be verified."
+    }
+  },
+  "smart_checklist": {
+    "description": "SMART framework for acceptance criteria quality.",
+    "criteria": {
+      "specific": "The criterion describes a single, well-defined scenario.",
+      "measurable": "The expected outcome can be objectively verified.",
+      "achievable": "The criterion is technically and practically feasible.",
+      "relevant": "The criterion directly supports the user story's intent.",
+      "time_bound": "The criterion includes timing expectations where applicable."
+    }
+  }
+}
