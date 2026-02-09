@@ -1,543 +1,139 @@
 """
-Pipeline module for transcript formatting and basic validation.
-Extracts raw text, formats it via LLM, and performs word-level validation.
+Cleaning and formatting pipeline for raw meeting transcripts.
+Requirement 1: Clean raw transcript once, cache output for downstream extraction.
 """
 
-import os
-import re
-from difflib import SequenceMatcher
+import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Optional
 
-import anthropic
+from anthropic import Anthropic
+from dotenv import load_dotenv
 
 import config
 from transcript_utils import (
     call_claude_with_retry,
-    check_token_budget,
-    clean_project_name,
-    normalize_text,
-    parse_filename_metadata,
-    setup_logging,
-    strip_yaml_frontmatter,
+    create_system_message_with_cache,
+    ensure_project_dir,
+    estimate_token_count,
+    load_prompt,
+    validate_api_key,
     validate_input_file,
 )
 
-
-def strip_sic_annotations(text: str) -> tuple[str, int]:
-    """Removes [sic] annotations and returns the cleaned text and count."""
-    pattern = r"\s*\[sic\](?:\s*\([^)]*\))?\s*"
-    cleaned_text, count = re.subn(pattern, " ", text)
-    return cleaned_text, count
+load_dotenv()
 
 
-def load_prompt() -> str:
-    """Load the formatting prompt template."""
-    prompt_path = config.PROMPTS_DIR / config.PROMPT_FORMATTING_FILENAME
+def clean_transcript(
+    raw_filename: str,
+    model: Optional[str] = None,
+    logger: Optional[logging.Logger] = None,
+) -> dict:
+    """
+    Clean and format a raw meeting transcript.
 
-    if not prompt_path.exists():
-        raise FileNotFoundError(
-            f"Prompt file not found: {prompt_path}\n"
-            f"Expected location: {config.PROMPTS_DIR}/{config.PROMPT_FORMATTING_FILENAME}"
-        )
-    return prompt_path.read_text(encoding="utf-8")
+    Steps:
+    1. Load raw transcript from source directory
+    2. Check cache -- skip API call if cleaned version exists
+    3. Send to Claude for cleaning (remove timestamps, noise, filler words)
+    4. Validate conciseness (output tokens < 70% of input)
+    5. Save cleaned output to project directory
 
+    Returns:
+        dict with keys: base_name, cleaned_path, cleaned_text, token_count,
+                        input_tokens, output_tokens, from_cache
+    """
+    model = model or config.settings.CLEANING_MODEL
 
-def load_raw_transcript(filename: str) -> str:
-    """Load the raw transcript from source directory."""
-    transcript_path = config.SOURCE_DIR / filename
-    validate_input_file(transcript_path)
-    return transcript_path.read_text(encoding="utf-8")
+    raw_path = config.SOURCE_DIR / raw_filename
+    validate_input_file(raw_path)
 
+    base_name = Path(raw_filename).stem
+    project_dir = ensure_project_dir(base_name)
+    cleaned_path = project_dir / f"{base_name}{config.SUFFIX_CLEANED}"
 
-def format_transcript_with_claude(
-    raw_transcript: str,
-    prompt_template: str,
-    model: str = config.DEFAULT_MODEL,
-    logger=None,
-) -> str:
-    """Send transcript to Claude for formatting."""
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise ValueError("ANTHROPIC_API_KEY environment variable not set.")
+    # Check cache
+    if config.CACHE_CLEANED and cleaned_path.exists():
+        if logger:
+            logger.info("Using cached cleaned transcript: %s", cleaned_path)
+        cleaned_text = cleaned_path.read_text(encoding="utf-8")
+        token_count = estimate_token_count(cleaned_text)
+        return {
+            "base_name": base_name,
+            "cleaned_path": str(cleaned_path),
+            "cleaned_text": cleaned_text,
+            "token_count": token_count,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "from_cache": True,
+        }
 
-    client = anthropic.Anthropic(api_key=api_key)
-
-    full_prompt = f"{prompt_template}\n\n---\n\nRAW TRANSCRIPT:\n\n{raw_transcript}"
+    # Load raw transcript
+    raw_text = raw_path.read_text(encoding="utf-8")
+    input_token_est = estimate_token_count(raw_text)
 
     if logger:
-        logger.info("Sending transcript to Claude...")
-        word_count = len(raw_transcript.split())
-        logger.info("Transcript length: %d words, %d characters",
-                    word_count, len(raw_transcript))
-        logger.info("Waiting for Claude response...")
-    else:
-        print("Sending transcript to Claude...", flush=True)
-        print(
-            f"Transcript length: {len(raw_transcript.split()):,} words, {len(raw_transcript):,} characters",
-            flush=True,
-        )
-        print(
-            "⏳ Waiting for Claude response (may take 2-5 minutes for longer transcripts)...",
-            flush=True,
+        logger.info("Raw transcript: %d chars, ~%d tokens", len(raw_text), input_token_est)
+
+    if input_token_est > 15000 and logger:
+        logger.warning(
+            "Transcript exceeds 15,000 tokens (~%d). Consider chunking for extraction.",
+            input_token_est,
         )
 
-    # Use prompt caching for the large input
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "text",
-                    "text": full_prompt,
-                    "cache_control": {"type": "ephemeral"},
-                }
-            ],
-        }
-    ]
+    # Load prompt and call Claude
+    prompt_text = load_prompt(config.PROMPT_CLEANING_FILENAME)
+    api_key = validate_api_key()
+    client = Anthropic(api_key=api_key)
 
-    # Expect at least 50% of the original word count (conservative)
-    min_expected_words = int(len(raw_transcript.split()) * 0.5)
+    system_msg = create_system_message_with_cache(prompt_text)
+    messages = [{"role": "user", "content": raw_text}]
+
+    if logger:
+        logger.info("Sending transcript to %s for cleaning...", model)
 
     message = call_claude_with_retry(
         client=client,
         model=model,
         messages=messages,
-        max_tokens=config.MAX_TOKENS_FORMATTING,
-        stream=True,
+        max_tokens=config.MAX_TOKENS_CLEANING,
+        temperature=config.TEMP_STRICT,
         logger=logger,
-        timeout=config.TIMEOUT_FORMATTING,
-        min_words=min_expected_words,
+        min_length=100,
+        system=system_msg,
+        timeout=config.TIMEOUT_CLEANING,
+        stream=True,
     )
 
-    return message.content[0].text
+    cleaned_text = message.content[0].text
+    output_token_est = estimate_token_count(cleaned_text)
 
-
-def save_formatted_transcript(content: str, original_filename: str) -> Path:
-    """Save formatted transcript with naming convention."""
-    # Use clean project name (stripping _validated, _vN) for consistency
-    stem = clean_project_name(original_filename)
-    output_filename = f"{stem}{config.SUFFIX_FORMATTED}"
-
-    project_dir = config.PROJECTS_DIR / stem
-    project_dir.mkdir(parents=True, exist_ok=True)
-
-    output_path = project_dir / output_filename
-    output_path.write_text(content, encoding="utf-8")
-    return output_path
-
-
-def format_transcript(
-    raw_filename: str, model: str = config.DEFAULT_MODEL, logger=None
-) -> bool:
-    """
-    Orchestrates the transcript formatting process.
-    """
-    if logger is None:
-        logger = setup_logging("format_transcript")
-
-    try:
-        if not config.SOURCE_DIR.exists():
-            raise FileNotFoundError(
-                f"Source directory not found: {config.SOURCE_DIR}")
-
-        logger.info(
-            f"Loading prompt template from: {config.TRANSCRIPTS_BASE / 'prompts'}"
-        )
-        prompt_template = load_prompt()
-
-        logger.info(f"Loading raw transcript: {raw_filename}")
-        raw_transcript = load_raw_transcript(raw_filename)
-
-        # Construct full prompt to check token budget before API call
-        full_prompt_for_budget_check = (
-            f"{prompt_template}\n\n---\n\nRAW TRANSCRIPT:\n\n{raw_transcript}"
-        )
-        # This should match max_tokens in format_transcript_with_claude
-        MAX_TOKENS_FOR_FORMATTING = config.MAX_TOKENS_FORMATTING
-
-        if not check_token_budget(
-            full_prompt_for_budget_check, MAX_TOKENS_FOR_FORMATTING, logger
-        ):
-            logger.error(
-                "Token budget exceeded for formatting. Aborting API call.")
-            return False
-
-        formatted_content = format_transcript_with_claude(
-            raw_transcript, prompt_template, model=model, logger=logger
-        )
-
-        formatted_content, sic_count = strip_sic_annotations(formatted_content)
-        if sic_count > 0 and logger:
-            logger.info("Removed %d [sic] annotation(s).", sic_count)
-
-        output_path = save_formatted_transcript(
-            formatted_content, raw_filename)
-
-        logger.info("✓ Success!")
-        logger.info("Formatted transcript saved to: %s", output_path)
-        return True
-
-    except ValueError as e:
-        logger.error(f"Configuration error: {e}")
-        raise e
-    except Exception as e:
-        logger.error("An error occurred: %s", e, exc_info=True)
-        return False
-
-
-def _generate_yaml_front_matter(meta: dict, source_filename: str) -> str:
-    """
-    Generate YAML front matter block.
-    """
-    authenticity = (
-        "Verified line-by-line against the original recording. No wording has been\n"
-        "  omitted, merged, reordered, paraphrased, or corrected. All text remains\n"
-        "  exactly as spoken except for added section headings and removal of timestamps."
-    )
-
-    return f'''---
-Title: "{meta["title"]}"
-Presenter: "{meta["presenter"]}"
-Lecture date: "{meta["date"]}"
-Source recording: "{source_filename}"
-Transcriber: "Automated; human-reviewed"
-Authenticity: "{authenticity}"
-Version: "v1.0"
-License: "© {meta["year"]} {meta["presenter"]}. All rights reserved."
-DOI: ""
----
-
-'''
-
-
-def add_yaml(transcript_filename: str, source_ext: str = "mp4", logger=None) -> bool:
-    """
-    Orchestrates the process of adding YAML front matter to a transcript.
-    """
-    if logger is None:
-        logger = setup_logging("add_yaml")
-
-    try:
-        logger.info("Adding YAML to %s", transcript_filename)
-
-        meta = parse_filename_metadata(transcript_filename)
-        stem = meta["stem"]
-
-        transcript_path = config.PROJECTS_DIR / stem / transcript_filename
-        validate_input_file(transcript_path)
-
-        source_filename = f"{meta['stem']}.{source_ext.lstrip('.')}"
-
-        formatted_content = transcript_path.read_text(encoding="utf-8")
-
-        yaml_block = _generate_yaml_front_matter(meta, source_filename)
-        final_content = yaml_block + formatted_content
-
-        output_path = config.PROJECTS_DIR / stem / \
-            f"{meta['stem']}{config.SUFFIX_YAML}"
-        output_path.write_text(final_content, encoding="utf-8")
-
-        logger.info("✓ Success! YAML added. Output saved to: %s", output_path)
-
-        # Validation: Log first 20 lines
-        logger.info("\n--- YAML Validation (First 20 lines) ---")
-        with open(output_path, "r", encoding="utf-8") as f:
-            for _ in range(20):
-                line = f.readline()
-                if not line:
-                    break
-                logger.info(line.rstrip())
-        logger.info("----------------------------------------\n")
-
-        return True
-
-    except Exception as e:
-        logger.error("An error occurred: %s", e, exc_info=True)
-        return False
-
-
-def _normalize_word_for_validation(w: str) -> str:
-    """Strips punctuation and lowercases for validation comparison."""
-    # Explicitly remove markdown symbols before regex
-    w = w.replace("#", "").replace("*", "").replace("_", "").replace("`", "")
-    # Aggressively strip markdown markers and punctuation from start/end
-    w = re.sub(r"^[\W_]+", "", w)
-    w = re.sub(r"[\W_]+$", "", w)
-    w = re.sub(r"[^\w']+$", "", w)
-    return w.lower()
-
-
-def _compare_transcripts(
-    raw_text: str,
-    formatted_text: str,
-    skip_words: Set[str],
-    max_lookahead: int,
-    max_mismatch_ratio: float,
-    max_mismatches: Optional[int],
-) -> Dict[str, Any]:
-    """Compares raw to formatted transcript, word by word."""
-    a_words: List[str] = raw_text.split()
-
-    # Filter B words to only those that have content after normalization
-    b_words_raw: List[str] = formatted_text.split()
-    b_words: List[str] = []
-    b_norm: List[str] = []
-    for w in b_words_raw:
-        norm = _normalize_word_for_validation(w)
-        if norm:
-            b_words.append(w)
-            b_norm.append(norm)
-
-    a_norm: List[str] = [_normalize_word_for_validation(w) for w in a_words]
-
-    mismatches: List[Dict[str, Any]] = []
-    checked = 0
-    i = 0
-    j = 0
-    stopped_reason: Optional[str] = None
-
-    while i < len(a_words):
-        a_n = a_norm[i]
-
-        if not a_n or a_n in skip_words:
-            i += 1
-            continue
-
-        checked += 1
-
-        if j >= len(b_words):
-            mismatches.append(
-                {
-                    "a_index": i,
-                    "a_word": a_words[i],
-                    "b_index": None,
-                    "b_word": None,
-                    "reason": "B exhausted",
-                }
+    # Validate conciseness
+    if input_token_est > 0:
+        ratio = output_token_est / input_token_est
+        if logger:
+            logger.info(
+                "Conciseness: %d -> %d tokens (%.0f%% of input)",
+                input_token_est, output_token_est, ratio * 100,
             )
-            stopped_reason = "B_exhausted"
-            break
-
-        if a_n == b_norm[j]:
-            i += 1
-            j += 1
-        else:
-            # Check for Fuzzy Match (Typo correction)
-            # e.g. "livel" vs "life"
-            if len(a_n) > 0 and len(b_norm[j]) > 0 and a_n[0] == b_norm[j][0]:
-                matcher = SequenceMatcher(None, a_n, b_norm[j])
-                if matcher.ratio() > 0.65:
-                    i += 1
-                    j += 1
-                    continue
-
-            # Bidirectional Lookahead Strategy
-            b_match_offset = None
-            for offset in range(1, max_lookahead + 1):
-                if j + offset < len(b_words) and a_n == b_norm[j + offset]:
-                    b_match_offset = offset
-                    break
-
-            a_match_offset = None
-            for offset in range(1, max_lookahead + 1):
-                if i + offset < len(a_norm) and b_norm[j] == a_norm[i + offset]:
-                    a_match_offset = offset
-                    break
-
-            action = "mismatch"
-
-            if b_match_offset is not None and a_match_offset is None:
-                action = "skip_b"
-            elif a_match_offset is not None and b_match_offset is None:
-                action = "skip_a"
-            elif b_match_offset is not None and a_match_offset is not None:
-                path1_score = 0
-                if i + 1 < len(a_norm) and j + b_match_offset + 1 < len(b_words):
-                    if a_norm[i + 1] == b_norm[j + b_match_offset + 1]:
-                        path1_score = 1
-
-                path2_score = 0
-                if i + a_match_offset + 1 < len(a_norm) and j + 1 < len(b_words):
-                    if a_norm[i + a_match_offset + 1] == b_norm[j + 1]:
-                        path2_score = 1
-
-                if path1_score > path2_score:
-                    action = "skip_b"
-                elif path2_score > path1_score:
-                    action = "skip_a"
-                else:
-                    if b_match_offset <= a_match_offset:
-                        action = "skip_b"
-                    else:
-                        action = "skip_a"
-
-            if action == "skip_b":
-                j += b_match_offset
-            elif action == "skip_a":
-                for k in range(a_match_offset):
-                    mismatches.append(
-                        {
-                            "a_index": i + k,
-                            "a_word": a_words[i + k],
-                            "b_index": j,
-                            "b_word": b_words[j],
-                            "reason": "Skipped in A (deletion in B)",
-                        }
-                    )
-                i += a_match_offset
-            else:
-                mismatches.append(
-                    {
-                        "a_index": i,
-                        "a_word": a_words[i],
-                        "b_index": j,
-                        "b_word": b_words[j],
-                        "reason": "Mismatch",
-                    }
+        if ratio > config.CLEANING_CONCISENESS_RATIO:
+            if logger:
+                logger.warning(
+                    "Cleaned output is %.0f%% of input (threshold: %.0f%%).",
+                    ratio * 100, config.CLEANING_CONCISENESS_RATIO * 100,
                 )
-                i += 1
 
-        if checked > 0:
-            mismatch_count = len(mismatches)
-            mismatch_ratio = mismatch_count / checked
-            if max_mismatches is not None and mismatch_count >= max_mismatches:
-                stopped_reason = "max_mismatches"
-                break
-            if checked > len(a_words) * 0.2 and mismatch_ratio > max_mismatch_ratio:
-                stopped_reason = "mismatch_ratio"
-                break
-
-    mismatch_count = len(mismatches)
-    mismatch_ratio = mismatch_count / checked if checked > 0 else 0.0
+    # Save cleaned output
+    cleaned_path.write_text(cleaned_text, encoding="utf-8")
+    if logger:
+        logger.info("Saved cleaned transcript: %s", cleaned_path)
 
     return {
-        "a_word_count": len(a_words),
-        "b_word_count": len(b_words),
-        "checked_words": checked,
-        "mismatch_count": mismatch_count,
-        "mismatch_ratio": mismatch_ratio,
-        "mismatches": mismatches,
-        "stopped_reason": stopped_reason,
+        "base_name": base_name,
+        "cleaned_path": str(cleaned_path),
+        "cleaned_text": cleaned_text,
+        "token_count": output_token_est,
+        "input_tokens": message.usage.input_tokens,
+        "output_tokens": message.usage.output_tokens,
+        "from_cache": False,
     }
-
-
-def validate_format(
-    raw_filename: str,
-    formatted_filename: Optional[str] = None,
-    skip_words_file: Optional[str] = None,
-    logger=None,
-) -> bool:
-    """Orchestrates the format validation process."""
-    if logger is None:
-        logger = setup_logging("validate_format")
-    try:
-        # Use clean project name to locate the project directory
-        stem = clean_project_name(raw_filename)
-        raw_file_path = config.SOURCE_DIR / raw_filename
-        if formatted_filename:
-            formatted_file_path = config.PROJECTS_DIR / stem / formatted_filename
-        else:
-            formatted_file_path = (
-                config.PROJECTS_DIR / stem / f"{stem}{config.SUFFIX_FORMATTED}"
-            )
-
-        validate_input_file(raw_file_path)
-        validate_input_file(formatted_file_path)
-
-        raw_text = raw_file_path.read_text(encoding="utf-8-sig")
-        formatted_text = formatted_file_path.read_text(encoding="utf-8-sig")
-
-        formatted_text = strip_yaml_frontmatter(formatted_text)
-
-        raw_clean = re.sub(
-            r"^\s*(\[[\d:.]+\]\s+[^:]+:|Unknown Speaker|Speaker \d+)\s+\d+:\d+(?::\d+)?",
-            "",
-            raw_text,
-            flags=re.MULTILINE,
-        )
-        raw_clean = re.sub(r"^\s*Transcribed by\b.*", "",
-                           raw_clean, flags=re.MULTILINE)
-
-        raw_clean = re.sub(
-            r"[\[\(]?\b\d+:\d{2}(?::\d{2})?(?:[ap]m)?[\]\)]?",
-            " ",
-            raw_clean,
-            flags=re.IGNORECASE,
-        )
-        raw_clean = re.sub(r"(?:^|\s)[\[\(]?:\d{2}\b[\]\)]?", " ", raw_clean)
-
-        # Remove procedural speech from raw text to avoid validation errors
-        # These are commonly removed by the formatting model
-        procedural_patterns = [
-            r"\bnext slide(?:,? please)?\.?",
-            r"\bnext one(?:,? please)?\.?",
-            r"\bslide please\.?",
-            r"\bintro\b",  
-            r"(?:^|[\.\!\?]\s+)so(?:,)?\s+",   # Sentence-starting 'So'
-            r"(?:^|[\.\!\?]\s+)okay(?:,)?\s+", # Sentence-starting 'Okay'
-            r"(?:^|[\.\!\?]\s+)right(?:,)?\s+", # Sentence-starting 'Right'
-            r"\bjust to emphasize(?: this)?",
-            r"\bone please",
-            r"\bthere you see",
-            r"\bthanks\.?",
-            r"\bnext(?:,)?\s+",
-            r"\bone(?:,)?\s+",
-            r"\bslide(?:,)?\s+",
-            r"\bplease\.?"
-        ]
-        for p in procedural_patterns:
-            raw_clean = re.sub(p, " ", raw_clean, flags=re.IGNORECASE | re.MULTILINE)
-
-        formatted_clean, _ = re.subn(
-            r"\s+\[sic\](?: \([^)]+\))?", "", formatted_text)
-        formatted_clean = re.sub(r"\*\*[^*]+:\*\*\s*", "", formatted_clean)
-
-        formatted_clean = re.sub(
-            r"^\s*#+.*$", "", formatted_clean, flags=re.MULTILINE)
-
-        skip_words = set()
-        if skip_words_file:
-            skip_words = {
-                normalize_text(word)
-                for word in Path(skip_words_file).read_text().splitlines()
-                if word and not word.startswith("#")
-            }
-
-        result = _compare_transcripts(
-            raw_clean,
-            formatted_clean,
-            skip_words,
-            config.VALIDATION_LOOKAHEAD_WINDOW,
-            0.05,
-            None,
-        )
-
-        logger.info("=== Comparison Summary ===")
-        for key, value in result.items():
-            if key != "mismatches":
-                logger.info(f"{key}: {value}")
-
-        if result["mismatch_ratio"] > config.VALIDATION_MISMATCH_RATIO:
-            logger.error("Validation FAILED: Mismatch ratio %.2f%% exceeds limit (%.1f%%).",
-                         result['mismatch_ratio'] * 100, config.VALIDATION_MISMATCH_RATIO * 100)
-            for m in result["mismatches"][:20]:
-                logger.error("  Mismatch (%s): A[%s]='%s' vs B[%s]='%s'", m.get(
-                    'reason', 'Unknown'), m['a_index'], m['a_word'], m['b_index'], m.get('b_word'))
-            return False
-
-        if result["mismatch_count"] > 0:
-            logger.warning("Validation PASSED with warnings: %d mismatches (%.2f%%).",
-                           result['mismatch_count'], result['mismatch_ratio'] * 100)
-            for m in result["mismatches"][:10]:
-                logger.warning("  Ignored Mismatch (%s): A[%s]='%s' vs B[%s]='%s'", m.get(
-                    'reason', 'Unknown'), m['a_index'], m['a_word'], m['b_index'], m.get('b_word'))
-        else:
-            logger.info("Validation PASSED: No mismatches found.")
-
-        return True
-
-    except Exception as e:
-        logger.error(
-            "An error occurred during format validation: %s", e, exc_info=True)
-        return False

@@ -1,59 +1,58 @@
+"""Tests for formatting_pipeline.py - cleaning and caching."""
+
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
-from formatting_pipeline import (
-    _generate_yaml_front_matter,
-    _normalize_word_for_validation,
-    strip_sic_annotations,
-)
+import config
 
 
-class TestFormattingPipeline(unittest.TestCase):
+class TestCleanTranscriptCaching(unittest.TestCase):
+    """Tests for the cleaning pipeline's caching behavior."""
 
-    def test_generate_yaml_front_matter(self):
-        meta = {
-            "title": "Roots of Bowen Theory",
-            "presenter": "Dr Michael Kerr",
-            "date": "2019-11-15",
-            "year": "2019",
-            "stem": "Roots of Bowen Theory - Dr Michael Kerr - 2019-11-15"
-        }
-        source_filename = "Roots of Bowen Theory - Dr Michael Kerr - 2019-11-15.mp4"
-        
-        yaml_content = _generate_yaml_front_matter(meta, source_filename)
-        
-        self.assertIn('Title: "Roots of Bowen Theory"', yaml_content)
-        self.assertIn('Presenter: "Dr Michael Kerr"', yaml_content)
-        self.assertIn('Lecture date: "2019-11-15"', yaml_content)
-        self.assertIn('Source recording: "Roots of Bowen Theory - Dr Michael Kerr - 2019-11-15.mp4"', yaml_content)
-        self.assertIn('License: "© 2019 Dr Michael Kerr. All rights reserved."', yaml_content)
-        self.assertTrue(yaml_content.startswith("---"))
-        self.assertIn("---", yaml_content[3:]) # Should end with ---
+    @patch("formatting_pipeline.validate_api_key")
+    @patch("formatting_pipeline.Anthropic")
+    @patch("formatting_pipeline.load_prompt")
+    def test_cache_hit_skips_api(self, mock_prompt, mock_anthropic, mock_key):
+        """When a cached cleaned file exists, API should not be called."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir = Path(tmpdir)
+            # Setup source file
+            source_dir = tmpdir / "source"
+            source_dir.mkdir()
+            raw_file = source_dir / "meeting.txt"
+            raw_file.write_text("Raw transcript content")
 
-    def test_strip_sic_annotations(self):
-        text = "This is a mispelled [sic] word."
-        cleaned, count = strip_sic_annotations(text)
-        self.assertEqual(cleaned.strip(), "This is a mispelled word.")
-        self.assertEqual(count, 1)
+            # Setup project dir with cached file
+            project_dir = tmpdir / "projects" / "meeting"
+            project_dir.mkdir(parents=True)
+            cleaned_file = project_dir / f"meeting{config.SUFFIX_CLEANED}"
+            cleaned_file.write_text("Cached cleaned content")
 
-        text_with_comment = "Another errror [sic] (spelling) here."
-        cleaned, count = strip_sic_annotations(text_with_comment)
-        self.assertEqual(cleaned.strip(), "Another errror here.")
-        self.assertEqual(count, 1)
+            # Patch config paths
+            with patch.object(config, "SOURCE_DIR", source_dir), \
+                 patch.object(config, "PROJECTS_DIR", tmpdir / "projects"), \
+                 patch("formatting_pipeline.config.SOURCE_DIR", source_dir), \
+                 patch("formatting_pipeline.ensure_project_dir", return_value=project_dir):
 
-    def test_normalize_word_for_validation(self):
-        # Basic lowercasing
-        self.assertEqual(_normalize_word_for_validation("Word"), "word")
-        
-        # Punctuation stripping
-        self.assertEqual(_normalize_word_for_validation("word."), "word")
-        self.assertEqual(_normalize_word_for_validation("word,"), "word")
-        self.assertEqual(_normalize_word_for_validation("?word!"), "word")
-        
-        # Markdown stripping
-        self.assertEqual(_normalize_word_for_validation("**word**"), "word")
-        self.assertEqual(_normalize_word_for_validation("*word*"), "word")
-        self.assertEqual(_normalize_word_for_validation("__word__"), "word")
-        self.assertEqual(_normalize_word_for_validation("`code`"), "code")
+                from formatting_pipeline import clean_transcript
+                result = clean_transcript("meeting.txt")
 
-if __name__ == '__main__':
+                self.assertTrue(result["from_cache"])
+                self.assertEqual(result["cleaned_text"], "Cached cleaned content")
+                self.assertEqual(result["input_tokens"], 0)
+                mock_anthropic.assert_not_called()
+
+
+class TestCleanTranscriptInput(unittest.TestCase):
+    """Tests for input validation."""
+
+    def test_missing_file_raises(self):
+        from formatting_pipeline import clean_transcript
+        with self.assertRaises(FileNotFoundError):
+            clean_transcript("nonexistent_file.txt")
+
+
+if __name__ == "__main__":
     unittest.main()

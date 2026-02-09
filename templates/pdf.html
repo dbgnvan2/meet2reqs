@@ -1,91 +1,111 @@
-{% extends "base.html" %}
-
-{% block styles %}
-{{ common_css }}
-
-{{ pdf_css }}
-{% endblock %}
-
-{% block body %}
-<div class="cover">
-    <h1>{{ meta.title }}</h1>
-    <div class="meta">
-        <p><strong>{{ meta.author }}</strong></p>
-        <p>{{ meta.date }}</p>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>{{ title }} - Meeting Report</title>
+    <style>{{ css }}</style>
+</head>
+<body>
+    <div class="cover">
+        <h1>{{ title }}</h1>
+        <p class="subtitle">Meeting Report</p>
+        <div class="toc">
+            <h2>Table of Contents</h2>
+            <ol>
+                {% if requirements %}<li>Requirements ({{ requirements|length }})</li>{% endif %}
+                {% if decisions %}<li>Decisions ({{ decisions|length }})</li>{% endif %}
+                {% if action_items %}<li>Action Items ({{ action_items|length }})</li>{% endif %}
+                {% if technology_stack %}<li>Technology Stack ({{ technology_stack|length }})</li>{% endif %}
+                {% if emphasized_items %}<li>Emphasized Items ({{ emphasized_items|length }})</li>{% endif %}
+            </ol>
+        </div>
     </div>
-    <div class="toc">
-        <h2>Contents</h2>
-        <ol>
-            <li>Abstract</li>
-            <li>Summary</li>
-            <li>Key Topics</li>
-            <li>Key Themes</li>
-            <li>Key Terms</li>
-            <li>Bowen References</li>
-            <li>Emphasized Items</li>
-            <li>Transcript</li>
-        </ol>
-    </div>
-</div>
 
-<div class="section">
-    <h1>Abstract</h1>
-    <div class="abstract">
-        {{ abstract_html|safe }}
+    {% if requirements %}
+    <div class="section">
+        <h2>Requirements</h2>
+        {% for req in requirements %}
+        <div class="requirement">
+            <h3>R{{ loop.index }}: {{ req.user_story|default("No user story")|e }}</h3>
+            <p><strong>Priority:</strong> {{ req.priority|default("medium")|e }}</p>
+            {% if req.acceptance_criteria %}
+            <p><strong>Acceptance Criteria:</strong></p>
+            <ul>
+            {% for ac in req.acceptance_criteria %}
+                <li>{{ ac|e }}</li>
+            {% endfor %}
+            </ul>
+            {% endif %}
+            {% if req.functional_requirements %}
+            <p><strong>Functional Requirements:</strong></p>
+            <ul>
+            {% for fr in req.functional_requirements %}
+                <li>{{ fr|e }}</li>
+            {% endfor %}
+            </ul>
+            {% endif %}
+        </div>
+        {% endfor %}
     </div>
-</div>
+    {% endif %}
 
-<div class="section">
-    <h1>Summary</h1>
-    <div class="abstract">
-        {{ summary_html|safe }}
+    {% if decisions %}
+    <div class="section">
+        <h2>Decisions</h2>
+        {% for dec in decisions %}
+        <div class="decision">
+            <h3>D{{ loop.index }}: {{ dec.decision|default("N/A")|e }}</h3>
+            <p><strong>Rationale:</strong> {{ dec.rationale|default("N/A")|e }}</p>
+            <p><strong>Status:</strong> {{ dec.status|default("final")|e }}</p>
+        </div>
+        {% endfor %}
     </div>
-</div>
+    {% endif %}
 
-<div class="section">
-    <h1>Key Topics</h1>
-    <div class="metadata-section">
-        {{ topics_html|safe }}
+    {% if action_items %}
+    <div class="section">
+        <h2>Action Items</h2>
+        <table>
+            <thead><tr><th>#</th><th>Task</th><th>Assignee</th><th>Deadline</th></tr></thead>
+            <tbody>
+            {% for item in action_items %}
+            <tr>
+                <td>{{ loop.index }}</td>
+                <td>{{ item.task|default("N/A")|e }}</td>
+                <td>{{ item.assignee|default("Unassigned")|e }}</td>
+                <td>{{ item.deadline|default("TBD")|e }}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
     </div>
-</div>
+    {% endif %}
 
-<div class="section">
-    <h1>Key Themes</h1>
-    <div class="metadata-section">
-        {{ themes_html|safe }}
+    {% if technology_stack %}
+    <div class="section">
+        <h2>Technology Stack</h2>
+        <ul>
+        {% for tech in technology_stack %}
+            <li><strong>{{ tech.name|default("N/A")|e }}</strong> ({{ tech.category|default("other")|e }}){% if tech.context %} -- {{ tech.context|e }}{% endif %}</li>
+        {% endfor %}
+        </ul>
     </div>
-</div>
+    {% endif %}
 
-<div class="section">
-    <h1>Key Terms</h1>
-    <div class="metadata-section">
-        {{ key_terms_html|safe }}
+    {% if emphasized_items %}
+    <div class="section">
+        <h2>Emphasized Items</h2>
+        {% for item in emphasized_items %}
+        <blockquote>"{{ item.phrase|default("N/A")|e }}" -- {{ item.speaker|default("Unknown")|e }}</blockquote>
+        {% endfor %}
     </div>
-</div>
+    {% endif %}
 
-<div class="section">
-    <h1>Bowen References</h1>
-    <div class="metadata-section">
-        {{ bowen_html|safe }}
+    {% if validation_score is not none %}
+    <div class="section">
+        <h2>Validation</h2>
+        <p>Overall Score: <strong>{{ "%.0f"|format(validation_score * 100) }}%</strong></p>
     </div>
-</div>
-
-<div class="section">
-    <h1>Emphasized Items</h1>
-    <div class="metadata-section">
-        {{ emphasis_html|safe }}
-    </div>
-</div>
-
-<div class="section">
-    <h1>Transcript</h1>
-    <div class="legend">
-        <strong>Highlights:</strong>
-        <span><mark class="bowen-ref">Bowen References</mark></span>
-        <span><mark class="emphasis">Emphasis (&lt;90%)</mark></span>
-        <span><mark class="emphasis score-90">High Emphasis (90-94%)</mark></span>
-        <span><mark class="emphasis score-95">Top Emphasis (95%+)</mark></span>
-    </div>
-    {{ formatted_content|safe }}
-</div>
-{% endblock %}
+    {% endif %}
+</body>
+</html>

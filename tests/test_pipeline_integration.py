@@ -1,23 +1,50 @@
-import inspect
+"""Tests for pipeline.py - facade import verification."""
+
 import unittest
 
-import pipeline
+
+class TestPipelineImports(unittest.TestCase):
+    """Verify that the pipeline facade exports all expected functions."""
+
+    def test_clean_transcript(self):
+        from pipeline import clean_transcript
+        self.assertTrue(callable(clean_transcript))
+
+    def test_extract_all(self):
+        from pipeline import extract_all
+        self.assertTrue(callable(extract_all))
+
+    def test_enrich_requirements(self):
+        from pipeline import enrich_requirements
+        self.assertTrue(callable(enrich_requirements))
+
+    def test_validate_extraction(self):
+        from pipeline import validate_extraction
+        self.assertTrue(callable(validate_extraction))
+
+    def test_generate_markdown_report(self):
+        from pipeline import generate_markdown_report
+        self.assertTrue(callable(generate_markdown_report))
+
+    def test_generate_html_report(self):
+        from pipeline import generate_html_report
+        self.assertTrue(callable(generate_html_report))
+
+    def test_generate_pdf_report(self):
+        from pipeline import generate_pdf_report
+        self.assertTrue(callable(generate_pdf_report))
+
+    def test_chunking_functions(self):
+        from pipeline import chunk_text, needs_chunking, count_tokens, aggregate_extractions
+        self.assertTrue(callable(chunk_text))
+        self.assertTrue(callable(needs_chunking))
+        self.assertTrue(callable(count_tokens))
+        self.assertTrue(callable(aggregate_extractions))
+
+    def test_setup_logging(self):
+        from pipeline import setup_logging
+        self.assertTrue(callable(setup_logging))
 
 
-class TestPipelineIntegration(unittest.TestCase):
-
-    def test_pipeline_exports_html_generator_functions(self):
-        """Verify that pipeline.py re-exports the functions moved to html_generator.py."""
-        self.assertTrue(hasattr(pipeline, "generate_webpage"), "pipeline.generate_webpage missing")
-        self.assertTrue(hasattr(pipeline, "generate_simple_webpage"), (
-            "pipeline.generate_simple_webpage missing"
-        ))
-        self.assertTrue(hasattr(pipeline, "generate_pdf"), "pipeline.generate_pdf missing")
-
-        # verify they are functions
-        self.assertTrue(inspect.isfunction(pipeline.generate_webpage))
-        self.assertTrue(inspect.isfunction(pipeline.generate_simple_webpage))
-        self.assertTrue(inspect.isfunction(pipeline.generate_pdf))
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

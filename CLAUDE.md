@@ -2,151 +2,128 @@
 
 ## Project Overview
 
-**trans-summary** is a Python-based automated transcript processing pipeline. It takes raw audio/video transcripts through formatting, structured extraction (topics, themes, key terms, emphasis, Bowen references), summarization, validation, and multi-format output generation (HTML, PDF). It offers both a Tkinter GUI and a CLI interface.
+**meet2reqs** is a Python pipeline that processes meeting transcripts into structured, actionable outputs: requirements (user stories with acceptance criteria), decisions, action items, technology stack, and emphasized items. It uses Anthropic's Claude API with token-efficient caching, chunking, and multi-task prompting. Offers both a Tkinter GUI and interactive CLI.
 
 ## Tech Stack
 
 - **Language**: Python 3.11+
-- **AI**: Anthropic Claude API (`anthropic==0.75.0`)
-- **HTML/PDF**: Jinja2 templates, WeasyPrint, BeautifulSoup4
-- **Testing**: pytest
+- **AI**: Anthropic Claude API (`anthropic>=0.75.0`)
+- **Token Counting**: tiktoken
+- **HTML/PDF**: Jinja2 templates, WeasyPrint
+- **Testing**: pytest (127 tests)
 - **Linting/Formatting**: ruff (Black-compatible, line-length 88)
-- **CI**: GitHub Actions (Python 3.8-3.11 matrix)
 
 ## Repository Structure
 
 ```
 meet2reqs/
-├── pipeline.py                  # Facade orchestrating all pipeline modules
-├── config.py                    # Singleton ProjectSettings (paths, models, validation)
+├── config.py                    # Singleton settings: models, paths, thresholds, validation
 ├── model_specs.py               # Model pricing and specifications
-├── transcript_utils.py          # Shared utilities and API interaction helpers
+├── transcript_utils.py          # Shared utilities: API calls, text processing, file I/O
 │
-├── formatting_pipeline.py       # Raw transcript -> formatted Markdown
-├── extraction_pipeline.py       # Extract topics, themes, emphasis, Bowen refs
-├── abstract_pipeline.py         # Abstract generation
-├── summary_pipeline.py          # Summary generation
-├── validation_pipeline.py       # Header, abstract, coverage validation
-├── summary_validation.py        # Deep summary validation
-├── abstract_validation.py       # Coverage & structural validation
-├── emphasis_detector.py         # Fuzzy-match emphasis detection
-├── html_generator.py            # Jinja2-based HTML/PDF output
-├── cleanup_pipeline.py          # Cleanup utilities
-├── packaging_pipeline.py        # Package transcript artifacts
+├── formatting_pipeline.py       # Step 1: Clean raw transcript, cache output
+├── chunking.py                  # Step 2: Split long transcripts at natural boundaries
+├── extraction_pipeline.py       # Step 3: Multi-output extraction (5 categories in 1 call)
+├── enrichment_pipeline.py       # Step 4: Enrich user stories with acceptance criteria
+├── validation_pipeline.py       # Step 5: Multi-level validation (structure, fidelity, INVEST)
+├── html_generator.py            # Step 6: Generate Markdown, HTML, PDF reports
+├── pipeline.py                  # Facade: re-exports all pipeline functions
 │
-├── transcript_process.py        # Interactive CLI wizard (main entry point)
-├── transcript_processor_gui.py  # Tkinter GUI application
-├── transcript_format.py         # CLI: format a transcript
-├── transcript_add_yaml.py       # CLI: add YAML metadata
-├── transcript_summarize.py      # CLI: generate summary
-├── transcript_to_webpage.py     # CLI: generate HTML webpage
-├── transcript_to_pdf.py         # CLI: generate PDF
-├── transcript_validate_*.py     # CLI: various validation scripts
+├── transcript_process.py        # Interactive CLI
+├── transcript_processor_gui.py  # Tkinter GUI
 │
-├── prompts/                     # Markdown prompt templates for Claude API
+├── prompts/                     # LLM prompt templates
+│   ├── cleaning.md              # Transcript cleaning prompt
+│   ├── extraction.md            # Multi-output extraction prompt (JSON schema)
+│   ├── enrichment.md            # User story enrichment prompt (GWT format)
+│   └── validation.md            # Completeness validation prompt
+│
 ├── templates/                   # Jinja2 HTML templates + CSS
-├── tests/                       # pytest test suite (17 test files)
-├── source/                      # Input transcripts directory
-├── projects/                    # Output artifacts per project
-├── logs/                        # Timestamped process logs
+│   ├── report.html              # Web report template
+│   ├── pdf.html                 # PDF report template
+│   └── styles/pdf.css           # Print-optimized CSS
 │
+├── tests/                       # pytest test suite (127 tests)
+├── source/                      # Input transcripts
+├── projects/                    # Output artifacts per transcript
+├── logs/                        # Timestamped process logs + token_usage.csv
+│
+├── REQUIREMENTS.md              # Full specification as user stories
 ├── pyproject.toml               # Build config, ruff settings
-├── requirements.txt             # Pinned dependencies
-├── .env.example                 # Environment variable template
-└── .github/workflows/ci.yml     # CI pipeline
+├── requirements.txt             # Python dependencies
+└── .env.example                 # Environment variable template
+```
+
+## Pipeline Data Flow
+
+```
+Raw Transcript (source/)
+  -> clean_transcript()        -> cleaned.md (file-cached)
+  -> needs_chunking()          -> chunk if > 10K tokens
+  -> extract_all()             -> 5 JSON files (requirements, decisions, actions, tech, emphasis)
+  -> enrich_requirements()     -> enriched_requirements.json (GWT acceptance criteria)
+  -> validate_extraction()     -> validation_report.json (structure + fidelity + INVEST + completeness)
+  -> generate_*_report()       -> report.md, report.html, report.pdf
+```
+
+## Development Commands
+
+```bash
+pip install -r requirements.txt                  # Install dependencies
+pytest tests/                                     # Run all 127 tests
+pytest tests/test_specific.py -v                  # Single test file
+ruff check .                                      # Lint
+ruff format .                                     # Format
+python -c "import config; config.validate_or_exit()"  # Validate config
+python transcript_process.py                      # Run CLI
+python transcript_processor_gui.py                # Run GUI
 ```
 
 ## Key Architecture Patterns
 
-- **Pipeline Pattern**: `pipeline.py` is the facade that re-exports functions from specialized modules (`formatting_pipeline`, `extraction_pipeline`, `summary_pipeline`, `validation_pipeline`, `html_generator`).
-- **Singleton Config**: `config.py` uses `ProjectSettings` singleton for all paths and model settings. Access via `config.settings` or legacy module-level proxies.
-- **Model-Agnostic Design**: API interactions are abstracted for potential multi-provider support.
-- **Prompt Caching**: Uses Anthropic ephemeral cache for cost reduction (62-85% savings).
-- **Multi-layer Validation**: 7 validation levels (API response, initial transcript, format, headers, coverage, fidelity, completeness).
+- **Pipeline Pattern**: `pipeline.py` is the facade re-exporting functions from specialized modules
+- **Singleton Config**: `config.py` uses `ProjectSettings` with backward-compatible module-level proxies
+- **File-Based Caching**: Cleaned transcripts cached to avoid redundant API calls (Req 1)
+- **Smart Chunking**: Splits at paragraph/speaker boundaries with overlap (Req 2)
+- **Multi-Task Extraction**: Single API call extracts all 5 categories into structured JSON (Req 3)
+- **Agile Enrichment**: Automatic Given-When-Then acceptance criteria from best practices (Req 4)
+- **Multi-Level Validation**: Structure, fidelity, INVEST compliance, GWT format, LLM completeness (Req 5)
+- **Triple-Format Output**: Markdown, HTML, PDF from Jinja2 templates (Req 6)
 
-## Development Commands
+## Extraction Categories
 
-### Install dependencies
-```bash
-pip install -r requirements.txt
-```
-
-### Run tests
-```bash
-pytest                              # All tests
-pytest tests/                       # Tests in tests/ directory only
-pytest tests/test_specific.py       # Single test file
-pytest --cov=. --cov-report=html    # With coverage report
-```
-
-### Lint and format
-```bash
-ruff check .          # Lint all files
-ruff check . --fix    # Auto-fix lint issues
-ruff format .         # Auto-format (Black-compatible)
-```
-
-### Validate configuration
-```bash
-python -c "import config; config.validate_or_exit()"
-```
-
-### Run the application
-```bash
-python transcript_processor_gui.py          # GUI mode
-python transcript_process.py                # Interactive CLI
-python transcript_format.py "file.txt"      # Format a single transcript
-```
-
-## Environment Setup
-
-1. Copy `.env.example` to `.env`
-2. Set `ANTHROPIC_API_KEY` (required)
-3. Optionally set `TRANSCRIPTS_DIR` to override the default base path
+| Category | JSON Key | Required Fields | Description |
+|----------|----------|----------------|-------------|
+| Requirements | `requirements` | `user_story` | INVEST-compliant user stories |
+| Decisions | `decisions` | `decision`, `rationale` | Outcomes with reasoning and status |
+| Action Items | `action_items` | `task` | Tasks with assignee and deadline |
+| Tech Stack | `technology_stack` | `name` | Tools/frameworks with category and context |
+| Emphasized Items | `emphasized_items` | `phrase` | Key statements with speaker and emphasis type |
 
 ## Code Conventions
 
 - **Style**: PEP 8 via ruff. Line length 88. Double quotes. 4-space indent.
-- **Naming**: `snake_case` for functions/variables, `PascalCase` for classes, `_prefix` for private functions, `test_` prefix for tests.
-- **Tests**: Use `unittest.TestCase` with pytest runner. Mock Claude API calls with `unittest.mock.patch` and `MagicMock`. Use `tempfile` for file I/O tests.
-- **Error handling**: Categorized exceptions with context. API responses go through 7-level validation. Retry logic with exponential backoff for API calls.
-- **Security**: Path traversal protection (sanitize `../`, null bytes, control chars), XSS prevention via Jinja2 auto-escaping, API keys via environment variables only.
-
-## Data Flow
-
-```
-Raw Transcript (source/)
-  -> format_transcript()          -> Formatted Markdown
-  -> add_yaml()                   -> YAML metadata header added
-  -> summarize_transcript()       -> Topics, Themes, Summary, Abstract extracted
-  -> validate_headers/coverage()  -> Quality checks
-  -> generate_webpage/pdf()       -> HTML/PDF output (projects/)
-```
+- **Naming**: `snake_case` functions/variables, `PascalCase` classes, `_prefix` private, `test_` prefix tests.
+- **Tests**: `unittest.TestCase` with pytest runner. Mock API calls with `unittest.mock`. Use `tempfile` for file I/O.
+- **Error handling**: Categorized exceptions with context. API retry with exponential backoff.
+- **Security**: Path traversal protection, XSS prevention via Jinja2 auto-escaping, API keys via env vars only.
 
 ## Models Used
 
-| Purpose       | Model                           | Notes                    |
-|---------------|---------------------------------|--------------------------|
-| Default       | claude-3-7-sonnet-20250219      | Supports caching         |
-| Formatting    | claude-3-7-sonnet-20250219      | Extended output          |
-| Auxiliary     | claude-3-5-haiku-20241022       | Cost-effective           |
-| Validation    | claude-3-5-haiku-20241022       | Cheaper for QA           |
-
-## Pre-commit Checklist
-
-1. All tests pass: `pytest`
-2. Configuration validates: `python -c "import config; config.validate_or_exit()"`
-3. Code formatted: `ruff format .`
-4. Linting passes: `ruff check .`
-5. New features include tests
-6. No hardcoded API keys or secrets
+| Role | Default Model | Purpose |
+|------|--------------|---------|
+| Cleaning | claude-sonnet-4-5-20250929 | Remove noise, format as Markdown |
+| Extraction | claude-sonnet-4-5-20250929 | Multi-output category extraction |
+| Enrichment | claude-haiku-4-5-20251001 | Add acceptance criteria (cost-effective) |
+| Validation | claude-haiku-4-5-20251001 | Completeness checking (cost-effective) |
 
 ## Important Notes for AI Assistants
 
-- The project root is the Python path -- modules import each other directly (e.g., `from config import settings`, `from pipeline import format_transcript`).
-- There are test files both in `tests/` and at the project root. The canonical test suite lives in `tests/`. Root-level `test_*.py` files are ad-hoc/debug tests.
-- `pipeline.py` is the central import hub. When adding new pipeline functions, export them through this facade.
-- Prompt templates in `prompts/` are Markdown files fed to the Claude API. Changes to prompts affect AI output quality.
-- `html_generator.py` uses Jinja2 templates from `templates/`. Always use auto-escaping for user content.
-- The `summary_validation.py` file is very large (~30K lines). Prefer targeted reads when working with it.
-- CI uses `|| true` on test/install steps, so failures don't block the pipeline. Treat test failures as real issues regardless.
+- The project root is the Python path -- modules import directly (e.g., `from config import settings`)
+- `pipeline.py` is the single import hub. New pipeline functions should be exported there.
+- Prompts in `prompts/` are Markdown fed to Claude API. Changes affect extraction quality.
+- Extraction response must be valid JSON matching the schema in `prompts/extraction.md`.
+- `enrichment_pipeline.py` flags ambiguous stories with `"confidence": "low"` for manual review.
+- Validation has 5 levels: structure, fidelity (fuzzy match to transcript), INVEST compliance, GWT format, LLM completeness.
+- `chunking.py` uses tiktoken for accurate token counts; falls back to char-based estimation.
+- All file suffixes defined in `config.py` (SUFFIX_*). Consistency matters for cache lookups.

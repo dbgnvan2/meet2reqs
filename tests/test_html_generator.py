@@ -1,73 +1,107 @@
+"""Tests for html_generator.py - document generation."""
+
+import json
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
-from html_generator import _generate_simple_html_page, _highlight_html_content
+import config
+from html_generator import generate_markdown_report
 
 
-class TestHtmlGenerator(unittest.TestCase):
+class TestGenerateMarkdownReport(unittest.TestCase):
+    """Tests for Markdown report generation."""
 
-    def test_highlight_html_content_basic(self):
-        formatted_html = "<p>This is a test of the highlighting system.</p>"
-
-        # Mock data
-        bowen_refs = [("Concept A", "test of the")]
-        emphasis_items = [("Item 1", "highlighting system")]
-
-        # Updated signature: 3 args
-        highlighted = _highlight_html_content(formatted_html, bowen_refs, emphasis_items)
-
-        # Check for Bowen mark
-        self.assertIn('<mark class="bowen-ref" title="Bowen Reference: Concept A">', highlighted)
-        self.assertIn(">test of the</mark>", highlighted)
-
-        # Check for Emphasis mark
-        self.assertIn('<mark class="emphasis" title="Emphasized: Item 1">', highlighted)
-        self.assertIn(">highlighting system</mark>", highlighted)
-
-    def test_highlight_html_content_exact_word_match(self):
-        formatted_html = "<p>Word match test.</p>"
-        emphasis_items = [("Target", "match")]
-
-        # Updated signature: 3 args
-        highlighted = _highlight_html_content(formatted_html, [], emphasis_items)
-
-        self.assertIn(
-            '<mark class="emphasis" title="Emphasized: Target">match</mark>', highlighted
-        )
-
-    def test_generate_simple_html_page_structure(self):
-        base_name = "Test Title - Test Author - 2025-01-01"
-        formatted_content = "<p>Content</p>"
-
-        # Mock metadata dict
-        metadata = {
-            "abstract": "Abstract text",
-            "topics": "Topics text",
-            "themes": "Themes text",
-            "key_terms": [
-                {"name": "Term1", "definition": "Def1"},
-                {"name": "Term2", "definition": "Def2"},
-            ],
+    def setUp(self):
+        self.extraction = {
+            "requirements": [{"user_story": "As a user, I want login", "priority": "high"}],
+            "decisions": [{"decision": "Use React", "rationale": "Popular framework", "status": "final"}],
+            "action_items": [{"task": "Set up CI", "assignee": "Alice", "deadline": "2026-03-01"}],
+            "technology_stack": [{"name": "React", "category": "frontend", "context": "adopted"}],
+            "emphasized_items": [{"phrase": "Critical deadline", "speaker": "Bob"}],
         }
-        summary = "Summary text"
-        bowen_refs = [("Ref1", "Quote1")]
-        emphasis_items = [("Emp1", "Quote2")]
+        self.enriched = [
+            {
+                "user_story": "As a user, I want login",
+                "priority": "high",
+                "acceptance_criteria": ["Given valid creds, When login, Then access dashboard"],
+                "functional_requirements": ["The system must authenticate in <2s"],
+            }
+        ]
 
-        html = _generate_simple_html_page(
-            base_name,
-            formatted_content,
-            metadata,
-            summary,
-            bowen_refs,
-            emphasis_items,
-        )
+    @patch("html_generator.ensure_project_dir")
+    def test_markdown_structure(self, mock_ensure):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mock_ensure.return_value = Path(tmpdir)
+            md = generate_markdown_report(
+                self.extraction, self.enriched, "test-meeting"
+            )
 
-        self.assertIn("<title>Test Title</title>", html)
-        self.assertIn("<h1>Test Title</h1>", html)
-        self.assertIn("Test Author", html)
-        self.assertIn("2025-01-01", html)
-        self.assertIn("<p>Content</p>", html)
-        self.assertIn("<strong>Term1</strong>", html)
-        self.assertIn("Abstract text", html)
+            self.assertIn("# Meeting Report", md)
+            self.assertIn("## Requirements", md)
+            self.assertIn("## Decisions", md)
+            self.assertIn("## Action Items", md)
+            self.assertIn("## Technology Stack", md)
+            self.assertIn("## Emphasized Items", md)
 
-if __name__ == '__main__':
+    @patch("html_generator.ensure_project_dir")
+    def test_requirements_content(self, mock_ensure):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mock_ensure.return_value = Path(tmpdir)
+            md = generate_markdown_report(
+                self.extraction, self.enriched, "test"
+            )
+
+            self.assertIn("As a user, I want login", md)
+            self.assertIn("Acceptance Criteria", md)
+            self.assertIn("Functional Requirements", md)
+
+    @patch("html_generator.ensure_project_dir")
+    def test_action_items_table(self, mock_ensure):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mock_ensure.return_value = Path(tmpdir)
+            md = generate_markdown_report(
+                self.extraction, self.enriched, "test"
+            )
+
+            self.assertIn("| # | Task | Assignee | Deadline |", md)
+            self.assertIn("Set up CI", md)
+            self.assertIn("Alice", md)
+
+    @patch("html_generator.ensure_project_dir")
+    def test_validation_score(self, mock_ensure):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mock_ensure.return_value = Path(tmpdir)
+            report = {"overall_score": 0.85}
+            md = generate_markdown_report(
+                self.extraction, self.enriched, "test",
+                validation_report=report,
+            )
+
+            self.assertIn("Validation", md)
+            self.assertIn("85%", md)
+
+    @patch("html_generator.ensure_project_dir")
+    def test_empty_extraction(self, mock_ensure):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mock_ensure.return_value = Path(tmpdir)
+            empty = {cat: [] for cat in config.EXTRACTION_CATEGORIES}
+            md = generate_markdown_report(empty, [], "test")
+
+            self.assertIn("# Meeting Report", md)
+            self.assertNotIn("## Requirements", md)
+
+    @patch("html_generator.ensure_project_dir")
+    def test_file_saved(self, mock_ensure):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mock_ensure.return_value = Path(tmpdir)
+            generate_markdown_report(
+                self.extraction, self.enriched, "test"
+            )
+            output = Path(tmpdir) / f"test{config.SUFFIX_REPORT_MD}"
+            self.assertTrue(output.exists())
+
+
+if __name__ == "__main__":
     unittest.main()

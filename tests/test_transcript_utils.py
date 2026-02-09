@@ -1,127 +1,210 @@
-import unittest
+"""Tests for transcript_utils.py - shared utility functions."""
 
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import config
 from transcript_utils import (
+    check_token_budget,
+    clean_project_name,
+    estimate_token_count,
     extract_section,
+    find_text_in_content,
+    format_file_size,
+    load_prompt,
     markdown_to_html,
     normalize_text,
-    parse_filename_metadata,
+    sanitize_filename,
     strip_yaml_frontmatter,
+    validate_input_file,
 )
 
 
-class TestTranscriptUtils(unittest.TestCase):
+class TestSanitizeFilename(unittest.TestCase):
+    def test_basic_filename(self):
+        self.assertEqual(sanitize_filename("hello.txt"), "hello.txt")
 
-    def test_markdown_to_html_headings(self):
-        self.assertEqual(markdown_to_html("# Title"), "<h1>Title</h1>")
-        self.assertEqual(markdown_to_html("## Subtitle"), "<h2>Subtitle</h2>")
-        self.assertEqual(markdown_to_html("### Sub-subtitle"), "<h3>Sub-subtitle</h3>")
+    def test_path_traversal(self):
+        result = sanitize_filename("../../etc/passwd")
+        self.assertNotIn("..", result)
+        self.assertNotIn("/", result)
 
-    def test_markdown_to_html_bold(self):
-        self.assertEqual(
-            markdown_to_html("This is **bold** text."),
-            "<p>This is <strong>bold</strong> text.</p>"
-        )
+    def test_null_bytes(self):
+        result = sanitize_filename("file\x00.txt")
+        self.assertNotIn("\x00", result)
 
-    def test_markdown_to_html_italic(self):
-        self.assertEqual(
-            markdown_to_html("This is *italic* text."),
-            "<p>This is <em>italic</em> text.</p>"
-        )
-
-    def test_markdown_to_html_paragraphs(self):
-        self.assertEqual(
-            markdown_to_html("Paragraph 1\n\nParagraph 2"),
-            "<p>Paragraph 1</p>\n<p>Paragraph 2</p>"
-        )
-
-    def test_normalize_text_simple(self):
-        self.assertEqual(normalize_text("  This is a Test  "), "this is a test")
-        self.assertEqual(normalize_text("This has <p>HTML</p> tags."), "this has html tags.")
-
-    def test_normalize_text_aggressive(self):
-        self.assertEqual(
-            normalize_text("This is a **Speaker:** test.", aggressive=True),
-            "this is a test"
-        )
-        self.assertEqual(
-            normalize_text("This has punctuation,!-.", aggressive=True),
-            "this has punctuation"
-        )
-
-    def test_strip_yaml_frontmatter(self):
-        content = """---
-title: My Title
----
-This is the real content.
-"""
-        self.assertEqual(strip_yaml_frontmatter(content), "This is the real content.\n")
-
-    def test_strip_yaml_frontmatter_no_yaml(self):
-        content = "This is the real content."
-        self.assertEqual(strip_yaml_frontmatter(content), "This is the real content.")
-
-    def test_extract_section(self):
-        sample_markdown_content = """
-# First Section
-
-Content of first section.
-
-## **Topics**
-
-- Topic 1
-- Topic 2
-
-## Some Other Section
-
-Some other content.
-
-## Key Themes
-
-- Theme A
-- Theme B
-"""
-        topics_section = extract_section(sample_markdown_content, "Topics")
-        self.assertIn("- Topic 1", topics_section)
-        self.assertIn("- Topic 2", topics_section)
-        self.assertNotIn("Some Other Section", topics_section)
-
-        themes_section = extract_section(sample_markdown_content, "Key Themes")
-        self.assertIn("- Theme A", themes_section)
-        self.assertIn("- Theme B", themes_section)
-
-        non_existent_section = extract_section(sample_markdown_content, "Non Existent")
-        self.assertEqual(non_existent_section, "")
-
-    def test_parse_filename_metadata(self):
-        metadata = parse_filename_metadata("My Awesome Title - John Doe - 2025-12-21.txt")
-        self.assertEqual(metadata["title"], "My Awesome Title")
-        self.assertEqual(metadata["presenter"], "John Doe")
-        self.assertEqual(metadata["author"], "John Doe")
-        self.assertEqual(metadata["date"], "2025-12-21")
-        self.assertEqual(metadata["year"], "2025")
-        self.assertEqual(metadata["stem"], "My Awesome Title - John Doe - 2025-12-21")
-
-    def test_parse_filename_metadata_with_hyphens(self):
-        metadata = parse_filename_metadata(
-            "A Title - With - Hyphens - Jane Doe - 2025-01-01.md"
-        )
-        self.assertEqual(metadata["title"], "A Title - With - Hyphens")
-        self.assertEqual(metadata["presenter"], "Jane Doe")
-        self.assertEqual(metadata["date"], "2025-01-01")
-        self.assertEqual(metadata["year"], "2025")
-
-    def test_parse_filename_metadata_formatted(self):
-        metadata = parse_filename_metadata(
-            "Some Title - Some Presenter - 2023-03-03 - formatted.md"
-        )
-        self.assertEqual(metadata["title"], "Some Title")
-        self.assertEqual(metadata["presenter"], "Some Presenter")
-        self.assertEqual(metadata["date"], "2023-03-03")
-        self.assertEqual(metadata["stem"], "Some Title - Some Presenter - 2023-03-03")
-
-    def test_parse_filename_metadata_invalid(self):
+    def test_empty_after_sanitize(self):
         with self.assertRaises(ValueError):
-            parse_filename_metadata("invalid-filename.txt")
+            sanitize_filename("../")
 
-if __name__ == '__main__':
+    def test_empty_input(self):
+        with self.assertRaises(ValueError):
+            sanitize_filename("")
+
+    def test_none_input(self):
+        with self.assertRaises(ValueError):
+            sanitize_filename(None)
+
+    def test_long_filename(self):
+        with self.assertRaises(ValueError):
+            sanitize_filename("x" * 300)
+
+
+class TestCleanProjectName(unittest.TestCase):
+    def test_basic_name(self):
+        self.assertEqual(clean_project_name("meeting-notes.txt"), "meeting-notes")
+
+    def test_strip_validated(self):
+        self.assertEqual(clean_project_name("meeting_validated.json"), "meeting")
+
+    def test_strip_version(self):
+        self.assertEqual(clean_project_name("meeting_v2.json"), "meeting")
+
+    def test_multiple_suffixes(self):
+        self.assertEqual(clean_project_name("meeting_v2_validated.json"), "meeting")
+
+
+class TestEstimateTokenCount(unittest.TestCase):
+    def test_empty_string(self):
+        self.assertEqual(estimate_token_count(""), 0)
+
+    def test_known_length(self):
+        text = "a" * 400
+        self.assertEqual(estimate_token_count(text), 100)
+
+    def test_real_text(self):
+        text = "Hello world, this is a test."
+        result = estimate_token_count(text)
+        self.assertGreater(result, 0)
+
+
+class TestCheckTokenBudget(unittest.TestCase):
+    def test_within_budget(self):
+        self.assertTrue(check_token_budget("short text", 10000))
+
+    def test_exceeds_budget(self):
+        long_text = "x" * 100000
+        self.assertFalse(check_token_budget(long_text, 100))
+
+
+class TestNormalizeText(unittest.TestCase):
+    def test_basic(self):
+        result = normalize_text("Hello World")
+        self.assertEqual(result, "hello world")
+
+    def test_timestamps(self):
+        result = normalize_text("At 10:30am the meeting started")
+        self.assertNotIn("10:30", result)
+
+    def test_html_tags(self):
+        result = normalize_text("<p>Hello</p>")
+        self.assertNotIn("<p>", result)
+
+    def test_aggressive_speaker_tags(self):
+        result = normalize_text("**John:** Hello everyone", aggressive=True)
+        self.assertNotIn("John:", result)
+
+
+class TestFindTextInContent(unittest.TestCase):
+    def test_exact_match(self):
+        start, end, ratio = find_text_in_content("hello world", "say hello world today")
+        self.assertIsNotNone(start)
+        self.assertEqual(ratio, 1.0)
+
+    def test_no_match(self):
+        start, end, ratio = find_text_in_content("xyzzy", "completely different text")
+        self.assertIsNone(start)
+        self.assertLess(ratio, config.FUZZY_MATCH_THRESHOLD)
+
+    def test_fuzzy_match(self):
+        start, end, ratio = find_text_in_content(
+            "the quick brown fox",
+            "here is the quick brown fox jumping",
+        )
+        self.assertIsNotNone(start)
+        self.assertGreaterEqual(ratio, config.FUZZY_MATCH_THRESHOLD)
+
+
+class TestExtractSection(unittest.TestCase):
+    def test_extract_existing(self):
+        content = "# Title\n## Requirements\nSome content here\n## Decisions\nOther content"
+        result = extract_section(content, "Requirements")
+        self.assertIn("Some content", result)
+        self.assertNotIn("Other content", result)
+
+    def test_extract_missing(self):
+        content = "# Title\n## Something Else\nContent"
+        result = extract_section(content, "Requirements")
+        self.assertEqual(result, "")
+
+    def test_extract_last_section(self):
+        content = "## First\nAAA\n## Second\nBBB"
+        result = extract_section(content, "Second")
+        self.assertIn("BBB", result)
+
+
+class TestStripYamlFrontmatter(unittest.TestCase):
+    def test_with_frontmatter(self):
+        content = "---\ntitle: Test\n---\nActual content"
+        result = strip_yaml_frontmatter(content)
+        self.assertIn("Actual content", result)
+        self.assertNotIn("title:", result)
+
+    def test_without_frontmatter(self):
+        content = "Just regular content"
+        result = strip_yaml_frontmatter(content)
+        self.assertEqual(result, content)
+
+
+class TestMarkdownToHtml(unittest.TestCase):
+    def test_headers(self):
+        result = markdown_to_html("# Title")
+        self.assertIn("<h1>Title</h1>", result)
+
+    def test_bold(self):
+        result = markdown_to_html("**bold text**")
+        self.assertIn("<strong>bold text</strong>", result)
+
+    def test_italic(self):
+        result = markdown_to_html("*italic text*")
+        self.assertIn("<em>italic text</em>", result)
+
+
+class TestFormatFileSize(unittest.TestCase):
+    def test_bytes(self):
+        self.assertIn("B", format_file_size(500))
+
+    def test_kilobytes(self):
+        self.assertIn("KB", format_file_size(2048))
+
+    def test_megabytes(self):
+        self.assertIn("MB", format_file_size(2 * 1024 * 1024))
+
+
+class TestValidateInputFile(unittest.TestCase):
+    def test_missing_file(self):
+        with self.assertRaises(FileNotFoundError):
+            validate_input_file(Path("/nonexistent/file.txt"))
+
+    def test_valid_file(self):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
+            f.write("content")
+            f.flush()
+            validate_input_file(Path(f.name))
+            Path(f.name).unlink()
+
+
+class TestLoadPrompt(unittest.TestCase):
+    def test_load_existing(self):
+        text = load_prompt("cleaning.md")
+        self.assertIn("Clean", text)
+
+    def test_load_missing(self):
+        with self.assertRaises(FileNotFoundError):
+            load_prompt("nonexistent_prompt.md")
+
+
+if __name__ == "__main__":
     unittest.main()

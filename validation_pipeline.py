@@ -1,562 +1,346 @@
 """
-Pipeline module for validation tasks (headers, abstracts, emphasis).
+Validation pipeline for extracted and enriched meeting transcript data.
+Requirement 5: Multi-level validation for all extraction categories.
 """
 
-import os
-import re
+import json
+import logging
 from pathlib import Path
 from typing import Optional
 
-import anthropic
+from anthropic import Anthropic
+from dotenv import load_dotenv
 
-import abstract_pipeline
-import abstract_validation
 import config
-import summary_pipeline
-import summary_validation
 from transcript_utils import (
     call_claude_with_retry,
     create_system_message_with_cache,
-    extract_emphasis_items,
-    extract_section,
+    ensure_project_dir,
     find_text_in_content,
-    parse_filename_metadata,
-    setup_logging,
-    strip_yaml_frontmatter,
-    validate_input_file,
+    load_prompt,
+    validate_api_key,
 )
 
-# Reuse the helper from formatting pipeline or define here if private
-# It was private in pipeline.py, let's redefine generic helper or import if possible.
-# Ideally, we load generic prompts via a utility.
-# For now, I'll reimplement a specific loader for validation prompts to avoid circular deps.
+load_dotenv()
 
 
-def _load_validation_prompt(prompt_filename: str) -> str:
-    """Load a validation prompt template."""
-    prompt_path = config.PROMPTS_DIR / prompt_filename
-    if not prompt_path.exists():
-        raise FileNotFoundError(
-            f"Prompt file not found: {prompt_path}\nExpected location: {config.PROMPTS_DIR}/{prompt_filename}"
-        )
-    return prompt_path.read_text(encoding="utf-8")
-
-
-def _load_formatted_transcript(filename: str) -> str:
-    """Load the formatted transcript."""
-    # 1. Check if filename is a direct path to an existing file
-    if Path(filename).is_file():
-        return Path(filename).read_text(encoding="utf-8")
-
-    meta = parse_filename_metadata(filename)
-    stem = meta["stem"]
-
-    # 2. Check project directory (Primary location)
-    transcript_path = config.PROJECTS_DIR / stem / filename
-    if transcript_path.exists():
-        return transcript_path.read_text(encoding="utf-8")
-
-    # 3. Fallback to legacy formatted directory
-    legacy_path = config.TRANSCRIPTS_BASE / "formatted" / filename
-    if legacy_path.exists():
-        return legacy_path.read_text(encoding="utf-8")
-
-    # If not found, validate_input_file will raise the appropriate error for the expected path
-    validate_input_file(transcript_path)
-    return transcript_path.read_text(encoding="utf-8")
-
-
-def _fill_prompt_template(
-    template: str, metadata: dict, transcript: str, **kwargs
-) -> str:
-    """Fill in the prompt template."""
-    placeholders = {**metadata, **kwargs}
-    for key, value in placeholders.items():
-        pattern = re.compile(
-            r"{{\s*" + re.escape(key) + r"\s*}}", re.IGNORECASE)
-        template = pattern.sub(lambda m: str(value), template)
-    template = template.replace("{{insert_transcript_text_here}}", transcript)
-    return template
-
-
-def _generate_validation_response(
-    prompt: str,
-    model: str,
-    temperature: float,
-    logger,
-    min_length: int = 50,
-    system: Optional[list] = None,
-    **kwargs
-) -> str:
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise ValueError("ANTHROPIC_API_KEY environment variable not set.")
-    client = anthropic.Anthropic(api_key=api_key)
-
-    if system:
-        kwargs["system"] = system
-
-    message = call_claude_with_retry(
-        client=client,
-        model=model,
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=config.MAX_TOKENS_HEADER_VALIDATION,  # Use ample tokens
-        temperature=temperature,
-        stream=True,
-        min_length=min_length,
-        logger=logger,
-        **kwargs,
-    )
-    return message.content[0].text
-
-
-# ============================================================================
-# EMPHASIS VALIDATION
-# ============================================================================
-
-
-def _extract_emphasis_quotes_from_file(all_key_items_file):
-    """Extract all quoted text from Emphasized Items section."""
-    extracts_path = Path(all_key_items_file)
-    stem = extracts_path.stem.replace(
-        config.SUFFIX_KEY_ITEMS_ALL.replace(".md", ""), ""
-    )
-    emphasis_file = extracts_path.parent / f"{stem}{config.SUFFIX_EMPHASIS}"
-
-    source_file = emphasis_file if emphasis_file.exists() else extracts_path
-    content = source_file.read_text(encoding="utf-8")
-    content = strip_yaml_frontmatter(content)
-
-    return extract_emphasis_items(content)
-
-
-def validate_emphasis_items(
-    formatted_file_path: Path, extracts_summary_path: Path, logger
-):
-    """Validate all emphasis quotes exist in the formatted transcript."""
-    formatted_content = formatted_file_path.read_text(encoding="utf-8")
-    quotes = _extract_emphasis_quotes_from_file(extracts_summary_path)
-
-    if not quotes:
-        logger.warning("No emphasis quotes found to validate")
-        return
-
-    valid_count, partial_count, invalid_count = 0, 0, 0
-
-    for label, quote in quotes:
-        # Use only first 15 words for fuzzy matching to avoid issues with long quotes
-        quote_core = " ".join(quote.split()[:15])
-
-        # Use shared utility instead of local _find_best_match
-        _, _, ratio = find_text_in_content(
-            quote_core, formatted_content, aggressive_normalization=True
-        )
-
-        if ratio >= 0.95:
-            valid_count += 1
-        elif ratio >= 0.80:
-            partial_count += 1
-        else:
-            logger.error("NOT FOUND: %s - Quote: %s...", label, quote[:100])
-            invalid_count += 1
-
-    logger.info("Emphasis Items Validation:")
-    logger.info(f"  Exact matches: {valid_count}")
-    if partial_count > 0:
-        logger.warning(f"  Partial matches: {partial_count}")
-    if invalid_count > 0:
-        logger.error("  Not found: %d", invalid_count)
-
-    accuracy = (valid_count + partial_count) / \
-        len(quotes) * 100 if quotes else 0
-    logger.info("  Overall accuracy: %.1f%%", accuracy)
-
-
-# ============================================================================
-# HEADER VALIDATION
-# ============================================================================
-
-
-def validate_headers(
-    formatted_filename: str, model: str = config.AUX_MODEL, logger=None
-) -> bool:
-    """
-    Validate that the section headers in the formatted transcript make sense.
-    """
-    if logger is None:
-        logger = setup_logging("validate_headers")
-
-    try:
-        base_name = (
-            Path(formatted_filename)
-            .stem.replace(config.SUFFIX_FORMATTED.replace(".md", ""), "")
-            .replace(config.SUFFIX_YAML.replace(".md", ""), "")
-        )
-        formatted_path = config.PROJECTS_DIR / base_name / formatted_filename
-        validate_input_file(formatted_path)
-
-        logger.info(f"Loading formatted transcript: {formatted_filename}")
-        transcript = formatted_path.read_text(encoding="utf-8")
-
-        # Create cached system message
-        system_message = create_system_message_with_cache(transcript)
-
-        prompt_template = _load_validation_prompt(
-            config.PROMPT_FORMATTING_HEADER_VALIDATION_FILENAME
-        )
-
-        # Remove transcript placeholder or text from prompt
-        full_prompt = prompt_template.replace(
-            "{{batch_content}}", "(See transcript in system message)"
-        )
-        if "{{batch_content}}" not in prompt_template:
-            # Fallback if the template doesn't use that variable, but usually it does.
-            # The code previously appended the transcript. We just need the template.
-            full_prompt = prompt_template
-
-        logger.info("Sending transcript to Claude for header validation...")
-
-        response = _generate_validation_response(
-            full_prompt,
-            model,
-            config.TEMP_STRICT,
-            logger,
-            min_length=100,
-            system=system_message,
-            suppress_caching_warnings=True
-        )
-
-        report_path = (
-            config.PROJECTS_DIR
-            / base_name
-            / f"{base_name}{config.SUFFIX_HEADER_VAL_REPORT}"
-        )
-        report_path.write_text(response, encoding="utf-8")
-
-        logger.info("✓ Header validation report saved to: %s", report_path)
-        return True
-
-    except Exception as e:
-        logger.error(
-            "An error occurred during header validation: %s", e, exc_info=True)
-        return False
-
-
-# ============================================================================
-# ABSTRACT VALIDATION (LEGACY)
-# ============================================================================
-
-
-def _extract_scores_from_output(output: str) -> dict:
-    """Extract assessment scores from the Claude output."""
-    scores = {}
-    table_pattern = r"|\s*(?:\*\*)?([^\*\|]+?)(?:\*\*)?\s*|\s*(?:\*\*)?(\d+(?:\.\d+)?)(?:\*\*)?(?:\s*/\s*5)?\s*|"
-    matches = re.findall(table_pattern, output)
-    for dimension, score in matches:
-        dimension = dimension.strip()
-        if dimension and dimension != "Dimension" and "---" not in dimension:
-            scores[dimension] = float(score)
-
-    if not scores:
-        list_pattern = (
-            r"[-*]\s*(?:\*\*)?([A-Za-z ]+?)(?:\*\*)?:?\s+(\d+(?:\.\d+)?)(?:/5)?"
-        )
-        matches = re.findall(list_pattern, output)
-        for dimension, score in matches:
-            scores[dimension.strip()] = float(score)
-
-    overall_match = re.search(
-        r"|\s*(?:\*\*)?Overall(?: Score)?(?:\*\*)?\s*|\s*(?:\*\*)?(\d+(?:\.\d+)?)(?:\*\*)?(?:\s*/\s*5)?\s*|",
-        output,
-        re.IGNORECASE,
-    )
-    if overall_match:
-        scores["Overall"] = float(overall_match.group(1))
-    else:
-        overall_text_match = re.search(
-            r"(?:Overall|Total)\s*(?:Score)?\s*[:|-]?\s*(?:\*\*)?\s*(\d+(?:\.\d+)?)",
-            output,
-            re.IGNORECASE,
-        )
-        if overall_text_match:
-            scores["Overall"] = float(overall_text_match.group(1))
-
-    return scores
-
-
-def _extract_extended_abstract(output: str) -> str:
-    """Extract the extended abstract from the validation output."""
-    match = re.search(
-        r"(?:^|\n)#+\s*(?:\*\*)?(?:EXTENDED|REVISED|IMPROVED)?\s*ABSTRACT(?:\*\*)?\s*\n+(.*?)(?=\n#|\Z)",
-        output,
-        flags=re.DOTALL | re.IGNORECASE,
-    )
-
-    if not match:
-        match = re.search(
-            r"(?:\*\*)?(?:EXTENDED|REVISED|IMPROVED)\s*ABSTRACT(?:\*\*)?:?\s*\n+(.*?)(?=\n#|\Z)",
-            output,
-            flags=re.DOTALL | re.IGNORECASE,
-        )
-
-    return match.group(1).strip() if match else ""
-
-
-def _save_abstracts(content: str, base_name: str) -> Path:
-    """Save the abstracts validation output."""
-    project_dir = config.PROJECTS_DIR / base_name
-    project_dir.mkdir(parents=True, exist_ok=True)
-    output_path = project_dir / f"{base_name}{config.SUFFIX_ABSTRACTS_LEGACY}"
-    output_path.write_text(content, encoding="utf-8")
-    return output_path
-
-
-def _load_extracts_summary_for_abstract(base_name: str) -> tuple[str, str]:
-    """Load All Key Items and extract the abstract."""
-    summary_path = config.PROJECTS_DIR / base_name / \
-        f"{base_name}{config.SUFFIX_KEY_ITEMS_ALL}"
-    validate_input_file(summary_path)
-    content = summary_path.read_text(encoding="utf-8")
-    abstract_match = re.search(
-        r"## (?:\[\*\])?Abstract(?:\*\])?\s*\n\n(.*?)(?=\n---|\n## |\Z)",
-        content,
-        flags=re.DOTALL,
-    )
-    if not abstract_match:
-        raise ValueError(
-            f"Could not find ## Abstract section in {summary_path}")
-    return content, abstract_match.group(1).strip()
-
-
-def validate_abstract_legacy(
+def validate_extraction(
+    extraction: dict,
+    cleaned_text: str,
     base_name: str,
+    enriched_requirements: Optional[list[dict]] = None,
+    model: Optional[str] = None,
+    logger: Optional[logging.Logger] = None,
+) -> dict:
+    """
+    Run multi-level validation on extracted and enriched data.
+
+    Validation levels:
+    1. Structure: JSON schema compliance for each category
+    2. Fidelity: Decisions/emphasized items traced back to transcript
+    3. Completeness: Coverage check via LLM
+    4. Requirements quality: INVEST compliance and testability
+    5. Enrichment quality: Acceptance criteria have clear outcomes
+
+    Returns:
+        Validation report dict with per-category results and overall score
+    """
+    model = model or config.settings.VALIDATION_MODEL
+    report = {"categories": {}, "overall_score": 0.0, "issues": []}
+
+    # Level 1: Structure validation
+    for category in config.EXTRACTION_CATEGORIES:
+        items = extraction.get(category, [])
+        cat_report = _validate_structure(category, items, logger)
+        report["categories"][category] = cat_report
+
+    # Level 2: Fidelity -- check that extracted items trace to transcript
+    fidelity_results = _validate_fidelity(extraction, cleaned_text, logger)
+    for category, result in fidelity_results.items():
+        report["categories"][category]["fidelity"] = result
+
+    # Level 3: Requirements quality (INVEST compliance)
+    requirements = extraction.get("requirements", [])
+    if requirements:
+        invest_results = _validate_invest(requirements, logger)
+        report["categories"]["requirements"]["invest"] = invest_results
+
+    # Level 4: Enrichment quality
+    if enriched_requirements:
+        enrichment_results = _validate_enrichment(enriched_requirements, logger)
+        report["categories"]["requirements"]["enrichment"] = enrichment_results
+
+    # Level 5: Completeness via LLM
+    completeness = _validate_completeness(extraction, cleaned_text, model, logger)
+    report["completeness"] = completeness
+
+    # Calculate overall score
+    report["overall_score"] = _calculate_score(report)
+
+    # Save report
+    project_dir = ensure_project_dir(base_name)
+    report_path = project_dir / f"{base_name}{config.SUFFIX_VALIDATION_REPORT}"
+    report_path.write_text(
+        json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    if logger:
+        logger.info(
+            "Validation complete. Score: %.1f%%. Report: %s",
+            report["overall_score"] * 100, report_path.name,
+        )
+
+    return report
+
+
+def _validate_structure(
+    category: str, items: list, logger: Optional[logging.Logger] = None
+) -> dict:
+    """Validate JSON structure for a category."""
+    result = {"count": len(items), "valid": 0, "issues": []}
+
+    required_fields = {
+        "requirements": ["user_story"],
+        "decisions": ["decision", "rationale"],
+        "action_items": ["task"],
+        "technology_stack": ["name"],
+        "emphasized_items": ["phrase"],
+    }
+
+    fields = required_fields.get(category, [])
+    for i, item in enumerate(items):
+        if not isinstance(item, dict):
+            result["issues"].append(f"Item {i}: not a dict")
+            continue
+        missing = [f for f in fields if f not in item or not item[f]]
+        if missing:
+            result["issues"].append(f"Item {i}: missing fields {missing}")
+        else:
+            result["valid"] += 1
+
+    if logger and result["issues"]:
+        logger.warning("Structure issues in %s: %d", category, len(result["issues"]))
+
+    return result
+
+
+def _validate_fidelity(
+    extraction: dict,
+    cleaned_text: str,
+    logger: Optional[logging.Logger] = None,
+) -> dict:
+    """Check that extracted items can be traced back to the transcript."""
+    results = {}
+
+    # Check decisions have verbatim or near-verbatim support
+    decisions = extraction.get("decisions", [])
+    decision_fidelity = {"checked": 0, "found": 0, "missing": []}
+    for dec in decisions:
+        text_to_find = dec.get("decision", "")
+        if not text_to_find:
+            continue
+        decision_fidelity["checked"] += 1
+        _, _, ratio = find_text_in_content(text_to_find, cleaned_text, aggressive_normalization=True)
+        if ratio >= config.FUZZY_MATCH_THRESHOLD:
+            decision_fidelity["found"] += 1
+        else:
+            decision_fidelity["missing"].append(text_to_find[:80])
+    results["decisions"] = decision_fidelity
+
+    # Check emphasized items
+    emphasis = extraction.get("emphasized_items", [])
+    emphasis_fidelity = {"checked": 0, "found": 0, "missing": []}
+    for item in emphasis:
+        text_to_find = item.get("phrase", "") or item.get("quote", "")
+        if not text_to_find:
+            continue
+        emphasis_fidelity["checked"] += 1
+        _, _, ratio = find_text_in_content(text_to_find, cleaned_text, aggressive_normalization=True)
+        if ratio >= config.FUZZY_MATCH_THRESHOLD:
+            emphasis_fidelity["found"] += 1
+        else:
+            emphasis_fidelity["missing"].append(text_to_find[:80])
+    results["emphasized_items"] = emphasis_fidelity
+
+    if logger:
+        for cat, fid in results.items():
+            if fid["checked"] > 0:
+                logger.info(
+                    "Fidelity %s: %d/%d found (%.0f%%)",
+                    cat, fid["found"], fid["checked"],
+                    fid["found"] / fid["checked"] * 100 if fid["checked"] else 0,
+                )
+
+    return results
+
+
+def _validate_invest(
+    requirements: list[dict], logger: Optional[logging.Logger] = None
+) -> dict:
+    """Check if user stories follow INVEST principles."""
+    result = {"checked": 0, "compliant": 0, "issues": []}
+
+    for i, req in enumerate(requirements):
+        story = req.get("user_story", "")
+        if not story:
+            continue
+        result["checked"] += 1
+        issues = []
+
+        # Check user story format: "As a [role], I want [feature] so that [benefit]"
+        story_lower = story.lower()
+        if not story_lower.startswith("as a "):
+            issues.append("Missing 'As a [role]' prefix")
+        if "i want" not in story_lower and "i need" not in story_lower:
+            issues.append("Missing 'I want/need [feature]' clause")
+        if "so that" not in story_lower and "in order to" not in story_lower:
+            issues.append("Missing 'so that [benefit]' clause")
+
+        if issues:
+            result["issues"].append({"index": i, "story": story[:80], "issues": issues})
+        else:
+            result["compliant"] += 1
+
+    if logger:
+        logger.info(
+            "INVEST compliance: %d/%d stories compliant",
+            result["compliant"], result["checked"],
+        )
+
+    return result
+
+
+def _validate_enrichment(
+    enriched: list[dict], logger: Optional[logging.Logger] = None
+) -> dict:
+    """Validate enrichment quality: acceptance criteria have clear outcomes."""
+    result = {"checked": 0, "good": 0, "issues": []}
+
+    for i, req in enumerate(enriched):
+        ac_list = req.get("acceptance_criteria", [])
+        if not ac_list:
+            result["issues"].append({"index": i, "issue": "No acceptance criteria"})
+            continue
+
+        result["checked"] += 1
+        has_given_when_then = False
+        for ac in ac_list:
+            ac_lower = ac.lower() if isinstance(ac, str) else ""
+            if "given" in ac_lower and "when" in ac_lower and "then" in ac_lower:
+                has_given_when_then = True
+                break
+
+        if has_given_when_then:
+            result["good"] += 1
+        else:
+            result["issues"].append({
+                "index": i,
+                "issue": "No Given-When-Then format found",
+            })
+
+    if logger:
+        logger.info(
+            "Enrichment quality: %d/%d with proper GWT format",
+            result["good"], result["checked"],
+        )
+
+    return result
+
+
+def _validate_completeness(
+    extraction: dict,
+    cleaned_text: str,
     model: str,
-    target_score: float,
-    max_iterations: int,
-    auto_continue: bool,
-    logger,
-) -> bool:
-    """Orchestrates the abstract validation and revision process (Legacy)."""
-    if logger is None:
-        logger = setup_logging("validate_abstract")
+    logger: Optional[logging.Logger] = None,
+) -> dict:
+    """Use LLM to check extraction completeness against transcript."""
+    prompt_text = load_prompt(config.PROMPT_VALIDATION_FILENAME)
+    api_key = validate_api_key()
+    client = Anthropic(api_key=api_key)
+
+    # Build a summary of what was extracted
+    summary_parts = []
+    for category in config.EXTRACTION_CATEGORIES:
+        items = extraction.get(category, [])
+        summary_parts.append(f"## {category} ({len(items)} items)")
+        for item in items[:10]:  # Limit to first 10 per category
+            if isinstance(item, dict):
+                label = item.get("user_story") or item.get("decision") or item.get("task") or item.get("name") or item.get("phrase") or str(item)
+                summary_parts.append(f"- {label[:120]}")
+            else:
+                summary_parts.append(f"- {str(item)[:120]}")
+
+    extraction_summary = "\n".join(summary_parts)
+
+    system_msg = create_system_message_with_cache(prompt_text)
+    user_content = (
+        f"## Transcript\n{cleaned_text}\n\n"
+        f"## Extracted Items\n{extraction_summary}"
+    )
+    messages = [{"role": "user", "content": user_content}]
 
     try:
-        logger.info("Loading files for: %s", base_name)
-        transcript = _load_formatted_transcript(
-            f"{base_name}{config.SUFFIX_FORMATTED}")
-
-        # Create cached system message
-        system_message = create_system_message_with_cache(transcript)
-
-        _, initial_abstract = _load_extracts_summary_for_abstract(base_name)
-        prompt_template = _load_validation_prompt(
-            config.PROMPT_ABSTRACT_VALIDATION_FILENAME
+        message = call_claude_with_retry(
+            client=client,
+            model=model,
+            messages=messages,
+            max_tokens=config.MAX_TOKENS_VALIDATION,
+            temperature=config.TEMP_STRICT,
+            logger=logger,
+            min_length=20,
+            system=system_msg,
+            timeout=config.TIMEOUT_VALIDATION,
         )
+        response_text = message.content[0].text
 
-        current_abstract = initial_abstract
-        best_score = 0
-        best_output = ""
+        # Try to parse JSON response
+        text = response_text.strip()
+        if text.startswith("```"):
+            lines = text.split("\n")
+            if lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            text = "\n".join(lines)
 
-        for i in range(max_iterations + 1):
-            logger.info("--- Iteration %d ---", i)
-
-            replacements = {
-                "source_document": "(See transcript in system message)",
-                "transcript": "(See transcript in system message)",
-                "text": "(See transcript in system message)",
-                "abstract": current_abstract,
-                "current_abstract": current_abstract,
-            }
-            # Use transcript length as proxy for empty check if needed, but not passing full text
-            prompt = _fill_prompt_template(prompt_template, replacements, "")
-
-            if "(See transcript in system message)" not in prompt:
-                prompt += f"\n\n--- ABSTRACT TO EVALUATE ---\n{current_abstract}"
-
-            validation_output = _generate_validation_response(
-                prompt,
-                model,
-                config.TEMP_BALANCED,
-                logger,
-                min_length=config.MIN_ABSTRACT_VALIDATION_CHARS,
-                system=system_message,
-            )
-            scores = _extract_scores_from_output(validation_output)
-
-            overall_score = scores.get("Overall", 0)
-            logger.info("Iteration %d score: %s", i, overall_score)
-
-            if overall_score > best_score:
-                best_score = overall_score
-                best_output = validation_output
-
-            if best_score >= target_score:
-                break
-
-            current_abstract = _extract_extended_abstract(validation_output)
-            if not current_abstract:
-                break
-
-        if best_score == 0:
-            return False
-
-        _save_abstracts(best_output, base_name)
-        return True
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            return {"raw_response": response_text, "score": 0.0}
 
     except Exception as e:
-        logger.error("An error occurred during abstract validation: %s",
-                     e, exc_info=True)
-        return False
+        if logger:
+            logger.error("Completeness validation failed: %s", e)
+        return {"error": str(e), "score": 0.0}
 
 
-# ============================================================================
-# STRUCTURED VALIDATION (COVERAGE)
-# ============================================================================
+def _calculate_score(report: dict) -> float:
+    """Calculate overall validation score (0.0 to 1.0)."""
+    scores = []
 
+    # Structure scores
+    for category, cat_report in report.get("categories", {}).items():
+        total = cat_report.get("count", 0)
+        valid = cat_report.get("valid", 0)
+        if total > 0:
+            scores.append(valid / total)
 
-def validate_abstract_coverage(base_name: str, logger=None, model: str = config.AUX_MODEL) -> bool:
-    """Validate the abstract using the coverage validation module."""
-    if logger is None:
-        logger = setup_logging("validate_abstract_coverage")
+    # Fidelity scores
+    for category, cat_report in report.get("categories", {}).items():
+        fid = cat_report.get("fidelity", {})
+        if isinstance(fid, dict) and fid.get("checked", 0) > 0:
+            scores.append(fid["found"] / fid["checked"])
 
-    try:
-        formatted_file = (
-            config.PROJECTS_DIR / base_name /
-            f"{base_name}{config.SUFFIX_FORMATTED}"
-        )
-        all_key_items_file = (
-            config.PROJECTS_DIR
-            / base_name
-            / f"{base_name}{config.SUFFIX_KEY_ITEMS_ALL}"
-        )
+    # INVEST score
+    invest = report.get("categories", {}).get("requirements", {}).get("invest", {})
+    if invest.get("checked", 0) > 0:
+        scores.append(invest["compliant"] / invest["checked"])
 
-        generated_abstract_file = (
-            config.PROJECTS_DIR / base_name /
-            f"{base_name}{config.SUFFIX_ABSTRACT_GEN}"
-        )
+    # Completeness score
+    completeness = report.get("completeness", {})
+    if isinstance(completeness, dict) and "score" in completeness:
+        try:
+            scores.append(float(completeness["score"]))
+        except (ValueError, TypeError):
+            pass
 
-        if generated_abstract_file.exists():
-            abstract_text = generated_abstract_file.read_text(encoding="utf-8")
-        else:
-            logger.error(
-                "No generated abstract found to validate. (Step 6 likely failed)")
-            return False
-
-        transcript = formatted_file.read_text(encoding="utf-8")
-        transcript = strip_yaml_frontmatter(transcript)
-
-        extracts_content = all_key_items_file.read_text(encoding="utf-8")
-        extracts_content = strip_yaml_frontmatter(extracts_content)
-
-        metadata = parse_filename_metadata(base_name)
-        topics_section = extract_section(extracts_content, "Topics")
-        themes_section = extract_section(extracts_content, "Key Themes")
-
-        transcript_words = len(transcript.split())
-        target_word_count = max(
-            int(transcript_words * config.ABSTRACT_TARGET_PERCENT),
-            config.ABSTRACT_MIN_WORDS,
-        )
-
-        abstract_input = abstract_pipeline.prepare_abstract_input(
-            metadata=metadata,
-            topics_markdown=topics_section,
-            themes_markdown=themes_section,
-            transcript=transcript,
-            target_word_count=target_word_count,
-        )
-
-        api_key = os.getenv("ANTHROPIC_API_KEY")
-        client = anthropic.Anthropic(api_key=api_key) if api_key else None
-
-        passed, report = abstract_validation.validate_and_report(
-            abstract_text, abstract_input, api_client=client, model=model, logger=logger
-        )
-
-        report_path = (
-            config.PROJECTS_DIR / base_name /
-            f"{base_name}{config.SUFFIX_ABSTRACT_VAL}"
-        )
-        report_path.write_text(report, encoding="utf-8")
-
-        logger.info("Validation Report saved to %s", report_path)
-        logger.info("Validation Passed: %s", passed)
-
-        for line in report.splitlines():
-            logger.info(line)
-
-        return passed
-
-    except Exception as e:
-        logger.error("Error validating abstract coverage: %s",
-                     e, exc_info=True)
-        return False
-
-
-def validate_summary_coverage(base_name: str, logger=None, model: str = config.AUX_MODEL) -> bool:
-    """Validate the summary using the coverage validation module."""
-    if logger is None:
-        logger = setup_logging("validate_summary_coverage")
-
-    try:
-        formatted_file = (
-            config.PROJECTS_DIR / base_name /
-            f"{base_name}{config.SUFFIX_FORMATTED}"
-        )
-        all_key_items_file = (
-            config.PROJECTS_DIR
-            / base_name
-            / f"{base_name}{config.SUFFIX_KEY_ITEMS_ALL}"
-        )
-        generated_summary_file = (
-            config.PROJECTS_DIR / base_name /
-            f"{base_name}{config.SUFFIX_SUMMARY_GEN}"
-        )
-
-        if generated_summary_file.exists():
-            summary_text = generated_summary_file.read_text(encoding="utf-8")
-        else:
-            logger.error("No generated summary found to validate.")
-            return False
-
-        transcript = formatted_file.read_text(encoding="utf-8")
-        transcript = strip_yaml_frontmatter(transcript)
-
-        extracts_content = all_key_items_file.read_text(encoding="utf-8")
-        extracts_content = strip_yaml_frontmatter(extracts_content)
-
-        metadata = parse_filename_metadata(base_name)
-        topics_section = extract_section(extracts_content, "Topics")
-        themes_section = extract_section(extracts_content, "Key Themes")
-
-        summary_input = summary_pipeline.prepare_summary_input(
-            metadata=metadata,
-            topics_markdown=topics_section,
-            themes_markdown=themes_section,
-            transcript=transcript,
-        )
-
-        api_key = os.getenv("ANTHROPIC_API_KEY")
-        client = anthropic.Anthropic(api_key=api_key) if api_key else None
-
-        passed, report = summary_validation.validate_and_report(
-            summary_text, summary_input, api_client=client, model=model, logger=logger
-        )
-
-        report_path = (
-            config.PROJECTS_DIR / base_name /
-            f"{base_name}{config.SUFFIX_SUMMARY_VAL}"
-        )
-        report_path.write_text(report, encoding="utf-8")
-
-        logger.info("Validation Report saved to %s", report_path)
-        logger.info("Validation Passed: %s", passed)
-
-        for line in report.splitlines():
-            logger.info(line)
-
-        return passed
-
-    except Exception as e:
-        logger.error("Error validating summary coverage: %s", e, exc_info=True)
-        return False
+    return sum(scores) / len(scores) if scores else 0.0

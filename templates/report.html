@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title }} - Meeting Report</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; line-height: 1.6; color: #333; max-width: 1100px; margin: 0 auto; padding: 2rem; background: #f8f9fa; }
+        header { background: #2c3e50; color: white; padding: 2rem; border-radius: 8px; margin-bottom: 2rem; }
+        header h1 { font-size: 1.8rem; margin-bottom: 0.5rem; }
+        nav { background: white; padding: 1rem 1.5rem; border-radius: 8px; margin-bottom: 2rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        nav a { color: #2c3e50; text-decoration: none; margin-right: 1.5rem; font-weight: 500; }
+        nav a:hover { color: #3498db; }
+        section { background: white; padding: 1.5rem 2rem; border-radius: 8px; margin-bottom: 1.5rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        h2 { color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 0.5rem; margin-bottom: 1rem; }
+        h3 { color: #34495e; margin: 1rem 0 0.5rem; }
+        .priority { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.85rem; font-weight: 600; }
+        .priority-high { background: #fee2e2; color: #991b1b; }
+        .priority-medium { background: #fef3c7; color: #92400e; }
+        .priority-low { background: #d1fae5; color: #065f46; }
+        .status { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.85rem; }
+        .status-final { background: #d1fae5; color: #065f46; }
+        .status-tentative { background: #fef3c7; color: #92400e; }
+        .status-deferred { background: #e5e7eb; color: #4b5563; }
+        table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+        th, td { padding: 0.75rem; text-align: left; border-bottom: 1px solid #e5e7eb; }
+        th { background: #f8f9fa; font-weight: 600; }
+        ul, ol { padding-left: 1.5rem; margin: 0.5rem 0; }
+        li { margin-bottom: 0.3rem; }
+        .emphasis-quote { font-style: italic; color: #555; border-left: 3px solid #3498db; padding-left: 0.75rem; margin: 0.5rem 0; }
+        .tech-badge { display: inline-block; background: #eef2ff; color: #3730a3; padding: 2px 8px; border-radius: 4px; font-size: 0.85rem; margin-right: 0.5rem; }
+        .score-bar { height: 8px; border-radius: 4px; background: #e5e7eb; margin-top: 0.5rem; }
+        .score-fill { height: 100%; border-radius: 4px; background: #10b981; }
+        .ac-item { background: #f8f9fa; padding: 0.5rem 0.75rem; border-radius: 4px; margin: 0.3rem 0; font-size: 0.9rem; }
+        .fr-item { font-size: 0.9rem; color: #555; }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>{{ title }}</h1>
+        <p>Meeting Report</p>
+    </header>
+
+    <nav>
+        <a href="#requirements">Requirements</a>
+        <a href="#decisions">Decisions</a>
+        <a href="#action-items">Action Items</a>
+        <a href="#tech-stack">Tech Stack</a>
+        <a href="#emphasized">Emphasized</a>
+        {% if validation_score is not none %}<a href="#validation">Validation</a>{% endif %}
+    </nav>
+
+    {% if requirements %}
+    <section id="requirements">
+        <h2>Requirements ({{ requirements|length }})</h2>
+        {% for req in requirements %}
+        <div style="margin-bottom: 1.5rem;">
+            <h3>R{{ loop.index }}: {{ req.user_story|default("No user story")|e }}</h3>
+            <span class="priority priority-{{ req.priority|default('medium') }}">{{ req.priority|default('medium')|upper }}</span>
+            {% if req.source_speaker %}<span style="color:#888; margin-left:0.5rem;">-- {{ req.source_speaker|e }}</span>{% endif %}
+
+            {% if req.acceptance_criteria %}
+            <p style="margin-top:0.75rem; font-weight:600;">Acceptance Criteria:</p>
+            {% for ac in req.acceptance_criteria %}
+            <div class="ac-item">{{ ac|e }}</div>
+            {% endfor %}
+            {% endif %}
+
+            {% if req.functional_requirements %}
+            <p style="margin-top:0.75rem; font-weight:600;">Functional Requirements:</p>
+            <ul>
+            {% for fr in req.functional_requirements %}
+                <li class="fr-item">{{ fr|e }}</li>
+            {% endfor %}
+            </ul>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </section>
+    {% endif %}
+
+    {% if decisions %}
+    <section id="decisions">
+        <h2>Decisions ({{ decisions|length }})</h2>
+        {% for dec in decisions %}
+        <div style="margin-bottom: 1.5rem;">
+            <h3>D{{ loop.index }}: {{ dec.decision|default("N/A")|e }}</h3>
+            <p><strong>Rationale:</strong> {{ dec.rationale|default("N/A")|e }}</p>
+            <span class="status status-{{ dec.status|default('final') }}">{{ dec.status|default('final')|upper }}</span>
+            {% if dec.participants %}
+            <p style="color:#888; margin-top:0.3rem;">Participants: {{ dec.participants|join(", ")|e }}</p>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </section>
+    {% endif %}
+
+    {% if action_items %}
+    <section id="action-items">
+        <h2>Action Items ({{ action_items|length }})</h2>
+        <table>
+            <thead>
+                <tr><th>#</th><th>Task</th><th>Assignee</th><th>Deadline</th></tr>
+            </thead>
+            <tbody>
+            {% for item in action_items %}
+                <tr>
+                    <td>{{ loop.index }}</td>
+                    <td>{{ item.task|default("N/A")|e }}</td>
+                    <td>{{ item.assignee|default("Unassigned")|e }}</td>
+                    <td>{{ item.deadline|default("TBD")|e }}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </section>
+    {% endif %}
+
+    {% if technology_stack %}
+    <section id="tech-stack">
+        <h2>Technology Stack ({{ technology_stack|length }})</h2>
+        {% for tech in technology_stack %}
+        <div style="margin-bottom: 0.75rem;">
+            <strong>{{ tech.name|default("N/A")|e }}</strong>
+            <span class="tech-badge">{{ tech.category|default("other")|e }}</span>
+            {% if tech.context %}<span style="color:#666;"> -- {{ tech.context|e }}</span>{% endif %}
+        </div>
+        {% endfor %}
+    </section>
+    {% endif %}
+
+    {% if emphasized_items %}
+    <section id="emphasized">
+        <h2>Emphasized Items ({{ emphasized_items|length }})</h2>
+        {% for item in emphasized_items %}
+        <div class="emphasis-quote">
+            "{{ item.phrase|default("N/A")|e }}"
+            <span style="color:#888;"> -- {{ item.speaker|default("Unknown")|e }}</span>
+        </div>
+        {% endfor %}
+    </section>
+    {% endif %}
+
+    {% if validation_score is not none %}
+    <section id="validation">
+        <h2>Validation</h2>
+        <p>Overall Score: <strong>{{ "%.0f"|format(validation_score * 100) }}%</strong></p>
+        <div class="score-bar">
+            <div class="score-fill" style="width: {{ "%.0f"|format(validation_score * 100) }}%"></div>
+        </div>
+    </section>
+    {% endif %}
+</body>
+</html>

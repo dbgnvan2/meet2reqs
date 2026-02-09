@@ -1,7 +1,7 @@
 [project]
-name = "trans-summary"
-version = "0.1.0"
-description = "Automated transcript summarization and processing pipeline."
+name = "meet2reqs"
+version = "0.2.0"
+description = "Meeting transcript processor: extract requirements, decisions, action items, tech stack, and emphasized items."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []

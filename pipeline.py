@@ -1,57 +1,32 @@
 """
-Core pipeline logic for the transcript processing application.
-This module acts as a facade, orchestrating the business logic by delegating
-to specialized pipeline modules.
+Core pipeline facade for the meeting transcript processing application.
+Orchestrates the complete workflow: clean -> chunk -> extract -> enrich -> validate -> generate.
 """
 
-from extraction_pipeline import (
-    _load_formatted_transcript,  # Helper used by CLI scripts
-    extract_bowen_references_from_transcript,
-    extract_scored_emphasis,
-    generate_structured_abstract,
-    generate_structured_summary,
-    summarize_transcript,
-)
-from formatting_pipeline import (
-    add_yaml,
-    format_transcript,
-    validate_format,
-)
+from formatting_pipeline import clean_transcript
+from chunking import chunk_text, needs_chunking, count_tokens, aggregate_extractions
+from extraction_pipeline import extract_all
+from enrichment_pipeline import enrich_requirements
+from validation_pipeline import validate_extraction
 from html_generator import (
-    generate_pdf,
-    generate_simple_webpage,
-    generate_webpage,
+    generate_markdown_report,
+    generate_html_report,
+    generate_pdf_report,
 )
-from packaging_pipeline import package_transcript
-from transcript_utils import delete_logs, setup_logging
-from validation_pipeline import (
-    validate_abstract_coverage,
-    validate_headers,
-    validate_summary_coverage,
-)
-from validation_pipeline import (
-    validate_abstract_legacy as validate_abstract,  # Legacy
-)
+from transcript_utils import setup_logging, delete_logs
 
-# Explicitly export symbols to prevent linters from removing them
 __all__ = [
-    "add_yaml",
-    "format_transcript",
-    "validate_format",
-    "validate_abstract_coverage",
-    "validate_headers",
-    "validate_summary_coverage",
-    "validate_abstract",
-    "_load_formatted_transcript",
-    "extract_bowen_references_from_transcript",
-    "extract_scored_emphasis",
-    "generate_structured_abstract",
-    "generate_structured_summary",
-    "summarize_transcript",
-    "generate_pdf",
-    "generate_simple_webpage",
-    "generate_webpage",
-    "package_transcript",
-    "delete_logs",
+    "clean_transcript",
+    "chunk_text",
+    "needs_chunking",
+    "count_tokens",
+    "aggregate_extractions",
+    "extract_all",
+    "enrich_requirements",
+    "validate_extraction",
+    "generate_markdown_report",
+    "generate_html_report",
+    "generate_pdf_report",
     "setup_logging",
+    "delete_logs",
 ]
