@@ -144,12 +144,33 @@ def set_transcripts_base(path: Union[str, Path]):
 # CONSTANTS (Stateless)
 # ============================================================================
 
-# File Suffixes
+# File Suffixes — Active Pipeline
 SUFFIX_FORMATTED = " - formatted.md"
 SUFFIX_YAML = " - yaml.md"
 SUFFIX_KEY_ITEMS_ALL = " - All Key Items.md"
 SUFFIX_KEY_ITEMS_RAW_LEGACY = " - topics-themes.md"
 SUFFIX_KEY_ITEMS_CLEAN = " - topics-themes-terms.md"
+SUFFIX_HEADER_VAL_REPORT = " - header-validation.md"
+SUFFIX_PDF = ".pdf"
+
+# File Suffixes — New Extraction Outputs (meet2reqs)
+SUFFIX_REQUIREMENTS = " - requirements.json"
+SUFFIX_REQUIREMENTS_DOC = " - requirements.md"
+SUFFIX_ACTION_ITEMS = " - action-items.json"
+SUFFIX_ACTION_ITEMS_DOC = " - action-items.md"
+SUFFIX_DECISIONS = " - decisions.json"
+SUFFIX_DECISIONS_DOC = " - decisions.md"
+SUFFIX_EMPHASIS_POINTS = " - emphasis-points.json"
+SUFFIX_EMPHASIS_POINTS_DOC = " - emphasis-points.md"
+SUFFIX_ENRICHED_REQUIREMENTS = " - requirements-enriched.json"
+SUFFIX_ENRICHED_REQUIREMENTS_DOC = " - requirements-enriched.md"
+
+# File Suffixes — Validation Reports (meet2reqs)
+SUFFIX_REQUIREMENTS_VAL = " - requirements-validation.md"
+SUFFIX_ACTION_ITEMS_VAL = " - action-items-validation.md"
+SUFFIX_DECISIONS_VAL = " - decisions-validation.md"
+
+# File Suffixes — Deprecated (kept for backward compatibility)
 SUFFIX_KEY_TERMS = " - key-terms.md"
 SUFFIX_BOWEN = " - bowen-references.md"
 SUFFIX_EMPHASIS = " - emphasis-items.md"
@@ -163,8 +184,6 @@ SUFFIX_ABSTRACT_VAL = " - abstract-validation.txt"
 SUFFIX_BLOG = " - blog.md"
 SUFFIX_WEBPAGE = ".html"
 SUFFIX_WEBPAGE_SIMPLE = " - simple.html"
-SUFFIX_PDF = ".pdf"
-SUFFIX_HEADER_VAL_REPORT = " - header-validation.md"
 SUFFIX_ABSTRACTS_LEGACY = " - abstracts.md"
 SUFFIX_VOICE_AUDIT = " - voice-audit.json"
 
@@ -173,15 +192,11 @@ SUFFIX_VOICE_AUDIT = " - voice-audit.json"
 #           AUX_MODEL = "claude-3-5-haiku-20241022"
 #           FORMATTING_MODEL = "claude-3-5-haiku-20241022"
 
-# Default Summary Word Count
-# Set to 650 - Claude 3.7 Sonnet tends to generate slightly more
-# Typically results in 700-900 word summaries
-DEFAULT_SUMMARY_WORD_COUNT = 650
-
 # Token Limits
 MAX_TOKENS_FORMATTING = 32000
 MAX_TOKENS_SUMMARY = 32000
-MAX_TOKENS_EXTRACTION = 8192
+MAX_TOKENS_EXTRACTION = 16384
+MAX_TOKENS_ENRICHMENT = 16384
 MAX_TOKENS_AUDIT = 2000
 MAX_TOKENS_HEADER_VALIDATION = 32000
 
@@ -196,20 +211,30 @@ TIMEOUT_FORMATTING = 1200  # 20 minutes
 TIMEOUT_SUMMARY = 900  # 15 minutes
 TIMEOUT_DEFAULT = 300  # 5 minutes
 
-# Prompt Filenames
+# Prompt Filenames — Active Pipeline
 PROMPT_FORMATTING_HEADER_VALIDATION_FILENAME = (
     "Transcript Formatting Headers Validation Prompt 12.md"
 )
 PROMPT_FORMATTING_FILENAME = "Transcript Formatting Prompt v12-Lite.md"
 PROMPT_EXTRACTS_FILENAME = "Transcript Summary Key Items v1.md"
+PROMPT_VALIDATION_COVERAGE_FILENAME = "Validation Coverage Prompt v1.md"
+PROMPT_PROBLEMATIC_HEADER_TERMS_FILENAME = "problematic_header_terms_v2.md"
+
+# Prompt Filenames — New Extraction (meet2reqs)
+PROMPT_REQUIREMENTS_EXTRACTION_FILENAME = "requirements_extraction_v1.md"
+PROMPT_ACTION_ITEMS_EXTRACTION_FILENAME = "action_items_extraction_v1.md"
+PROMPT_DECISIONS_EXTRACTION_FILENAME = "decisions_extraction_v1.md"
+PROMPT_EMPHASIS_POINTS_EXTRACTION_FILENAME = "emphasis_points_extraction_v1.md"
+PROMPT_REQUIREMENTS_ENRICHMENT_FILENAME = "requirements_enrichment_v1.md"
+PROMPT_EXTRACTION_VALIDATION_FILENAME = "extraction_validation_v1.md"
+
+# Prompt Filenames — Deprecated (kept for backward compatibility)
 PROMPT_KEY_TERMS_FILENAME = "Transcript Summary Key Terms v1.md"
 PROMPT_BLOG_FILENAME = "Transcript Summary Blog Post v1.md"
 PROMPT_ABSTRACT_VALIDATION_FILENAME = "abstract_quality_assessment_prompt_v2.md"
 PROMPT_VOICE_AUDIT_FILENAME = "Transcript Voice Audit Prompt v1.md"
 PROMPT_STRUCTURED_SUMMARY_FILENAME = "Summary Generation Prompt v1.md"
 PROMPT_STRUCTURED_ABSTRACT_FILENAME = "Abstract Generation Prompt v1.md"
-PROMPT_VALIDATION_COVERAGE_FILENAME = "Validation Coverage Prompt v1.md"
-PROMPT_PROBLEMATIC_HEADER_TERMS_FILENAME = "problematic_header_terms_v2.md"
 PROMPT_EMPHASIS_SCORING_FILENAME = "emphasis_dedection_v3_production.md"
 PROMPT_BOWEN_EXTRACTION_FILENAME = "bowen_reference_extraction_v1.md"
 
@@ -224,23 +249,43 @@ MIN_EXTRACTS_WORDS_FLOOR = 150
 MIN_TRANSCRIPT_WORDS_FOR_FLOOR = 1000
 MIN_EXTRACTS_WORDS_ABSOLUTE = 50
 MIN_EXTRACTS_CHARS = 500
-MIN_KEY_TERMS_CHARS = 100
-MIN_BLOG_CHARS = 1000
-MIN_ABSTRACT_VALIDATION_CHARS = 50
-
-# Abstract Settings
-ABSTRACT_TARGET_PERCENT = 0.03  # 3% of transcript word count
-ABSTRACT_MIN_WORDS = 150
-
-# Summary Structure Allocations
-SUMMARY_OPENING_PCT = 0.14
-SUMMARY_CLOSING_PCT = 0.06
-SUMMARY_QA_PCT = 0.10
 
 # Validation Thresholds
 TRANSCRIPT_MIN_WORDS = 1500
-BLOG_MIN_WORDS = 800
 EVALUATIVE_TERMS = ["valuable", "insightful", "excellent"]
+
+# ============================================================================
+# MEET2REQS EXTRACTION SETTINGS
+# ============================================================================
+
+# Fidelity Validation — fuzzy match thresholds for tracing extractions to transcript
+EXTRACTION_FIDELITY_EXACT = 0.95       # Exact match threshold
+EXTRACTION_FIDELITY_PARTIAL = 0.80     # Partial match (acceptable)
+EXTRACTION_FIDELITY_REJECT = 0.65      # Below this = not traceable
+
+# Minimum extraction counts (warn if fewer found)
+MIN_REQUIREMENTS_COUNT = 1
+MIN_ACTION_ITEMS_COUNT = 0             # Meetings may not have action items
+MIN_DECISIONS_COUNT = 0                # Meetings may not have decisions
+MIN_EMPHASIS_POINTS_COUNT = 0          # Optional
+
+# Enrichment settings
+ENRICHMENT_MIN_ACCEPTANCE_CRITERIA = 3
+ENRICHMENT_MAX_ACCEPTANCE_CRITERIA = 5
+ENRICHMENT_MIN_FUNCTIONAL_REQS = 1
+ENRICHMENT_MAX_FUNCTIONAL_REQS = 3
+
+# Deprecated — kept for backward compatibility
+MIN_KEY_TERMS_CHARS = 100
+MIN_BLOG_CHARS = 1000
+MIN_ABSTRACT_VALIDATION_CHARS = 50
+ABSTRACT_TARGET_PERCENT = 0.03
+ABSTRACT_MIN_WORDS = 150
+SUMMARY_OPENING_PCT = 0.14
+SUMMARY_CLOSING_PCT = 0.06
+SUMMARY_QA_PCT = 0.10
+BLOG_MIN_WORDS = 800
+DEFAULT_SUMMARY_WORD_COUNT = 650
 
 # Token Estimation & Safety
 CHARS_PER_TOKEN = 4
@@ -630,16 +675,14 @@ def validate_configuration(verbose: bool = True, auto_fix: bool = False) -> Vali
             "PROMPT_FORMATTING_HEADER_VALIDATION_FILENAME": PROMPT_FORMATTING_HEADER_VALIDATION_FILENAME,
             "PROMPT_FORMATTING_FILENAME": PROMPT_FORMATTING_FILENAME,
             "PROMPT_EXTRACTS_FILENAME": PROMPT_EXTRACTS_FILENAME,
-            "PROMPT_KEY_TERMS_FILENAME": PROMPT_KEY_TERMS_FILENAME,
-            "PROMPT_BLOG_FILENAME": PROMPT_BLOG_FILENAME,
-            "PROMPT_ABSTRACT_VALIDATION_FILENAME": PROMPT_ABSTRACT_VALIDATION_FILENAME,
-            "PROMPT_VOICE_AUDIT_FILENAME": PROMPT_VOICE_AUDIT_FILENAME,
-            "PROMPT_STRUCTURED_SUMMARY_FILENAME": PROMPT_STRUCTURED_SUMMARY_FILENAME,
-            "PROMPT_STRUCTURED_ABSTRACT_FILENAME": PROMPT_STRUCTURED_ABSTRACT_FILENAME,
             "PROMPT_VALIDATION_COVERAGE_FILENAME": PROMPT_VALIDATION_COVERAGE_FILENAME,
             "PROMPT_PROBLEMATIC_HEADER_TERMS_FILENAME": PROMPT_PROBLEMATIC_HEADER_TERMS_FILENAME,
-            "PROMPT_EMPHASIS_SCORING_FILENAME": PROMPT_EMPHASIS_SCORING_FILENAME,
-            "PROMPT_BOWEN_EXTRACTION_FILENAME": PROMPT_BOWEN_EXTRACTION_FILENAME,
+            "PROMPT_REQUIREMENTS_EXTRACTION_FILENAME": PROMPT_REQUIREMENTS_EXTRACTION_FILENAME,
+            "PROMPT_ACTION_ITEMS_EXTRACTION_FILENAME": PROMPT_ACTION_ITEMS_EXTRACTION_FILENAME,
+            "PROMPT_DECISIONS_EXTRACTION_FILENAME": PROMPT_DECISIONS_EXTRACTION_FILENAME,
+            "PROMPT_EMPHASIS_POINTS_EXTRACTION_FILENAME": PROMPT_EMPHASIS_POINTS_EXTRACTION_FILENAME,
+            "PROMPT_REQUIREMENTS_ENRICHMENT_FILENAME": PROMPT_REQUIREMENTS_ENRICHMENT_FILENAME,
+            "PROMPT_EXTRACTION_VALIDATION_FILENAME": PROMPT_EXTRACTION_VALIDATION_FILENAME,
         }
 
         missing_prompts = []

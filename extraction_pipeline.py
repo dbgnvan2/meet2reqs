@@ -1,16 +1,23 @@
-"Pipeline module for extracting insights, summaries, and emphasis items."
+"Pipeline module for extracting requirements, action items, decisions, and emphasis from transcripts."
 
+import json
 import os
 import re
 from pathlib import Path
 
 import anthropic
 
-import abstract_pipeline
 import config
+import enrichment_pipeline
 
-# We need imports for structured summary generation if summarize_transcript calls it
-import summary_pipeline
+# Legacy imports — kept for backward compatibility with old pipeline
+try:
+    import abstract_pipeline
+    import summary_pipeline
+except ImportError:
+    abstract_pipeline = None
+    summary_pipeline = None
+
 from transcript_utils import (
     call_claude_with_retry,
     create_system_message_with_cache,
@@ -22,7 +29,13 @@ from transcript_utils import (
     validate_emphasis_item,
     validate_input_file,
 )
-from validation_pipeline import validate_emphasis_items, validate_summary_coverage
+
+# Legacy import for backward compatibility
+try:
+    from validation_pipeline import validate_emphasis_items, validate_summary_coverage
+except ImportError:
+    validate_emphasis_items = None
+    validate_summary_coverage = None
 
 # Helpers
 
@@ -700,3 +713,558 @@ def summarize_transcript(
     except Exception as e:
         logger.error("An error occurred: %s", e, exc_info=True)
         return False
+
+
+# ============================================================================
+# MEET2REQS EXTRACTION PIPELINE
+# ============================================================================
+
+
+def _parse_json_response(response: str, logger) -> list:
+    """Parse JSON array from Claude's response, handling common formatting issues."""
+    text = response.strip()
+
+    # Strip markdown code fences if present
+    if text.startswith("```"):
+        lines = text.split("\n")
+        # Remove first line (```json or ```)
+        lines = lines[1:]
+        # Remove last line (```)
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+
+    # Try direct parse
+    try:
+        data = json.loads(text)
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            return [data]
+        logger.warning("JSON parsed but unexpected type: %s", type(data).__name__)
+        return []
+    except json.JSONDecodeError:
+        pass
+
+    # Try to find JSON array in the response
+    bracket_start = text.find("[")
+    bracket_end = text.rfind("]")
+    if bracket_start != -1 and bracket_end > bracket_start:
+        try:
+            data = json.loads(text[bracket_start:bracket_end + 1])
+            if isinstance(data, list):
+                return data
+        except json.JSONDecodeError:
+            pass
+
+    logger.error("Failed to parse JSON from response. First 500 chars: %s", text[:500])
+    return []
+
+
+def _save_json(data, stem: str, suffix: str, logger) -> Path:
+    """Save extraction result as JSON working file."""
+    project_dir = config.PROJECTS_DIR / stem
+    project_dir.mkdir(parents=True, exist_ok=True)
+    output_path = project_dir / f"{stem}{suffix}"
+    output_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    logger.info("  Saved JSON: %s", output_path.name)
+    return output_path
+
+
+def _save_doc(content: str, stem: str, suffix: str, logger) -> Path:
+    """Save a Markdown document."""
+    project_dir = config.PROJECTS_DIR / stem
+    project_dir.mkdir(parents=True, exist_ok=True)
+    output_path = project_dir / f"{stem}{suffix}"
+    output_path.write_text(content, encoding="utf-8")
+    logger.info("  Saved doc: %s", output_path.name)
+    return output_path
+
+
+def _format_requirements_doc(requirements: list) -> str:
+    """Format requirements JSON into readable Markdown document."""
+    lines = ["# Requirements (User Stories)\n"]
+    for req in requirements:
+        rid = req.get("id", "REQ-???")
+        lines.append(f"## {rid}\n")
+        lines.append(f"**User Story:** {req.get('user_story', 'N/A')}\n")
+        lines.append(f"- **Role:** {req.get('role', 'N/A')}")
+        lines.append(f"- **Capability:** {req.get('capability', 'N/A')}")
+        lines.append(f"- **Benefit:** {req.get('benefit', 'N/A')}")
+        lines.append(f"- **Priority:** {req.get('priority', 'N/A')}")
+        lines.append(f"- **Status:** {req.get('status', 'N/A')}")
+        if req.get("speaker"):
+            lines.append(f"- **Raised by:** {req['speaker']}")
+        if req.get("context"):
+            lines.append(f"- **Context:** {req['context']}")
+        quotes = req.get("source_quotes", [])
+        if quotes:
+            lines.append("\n**Source Quotes:**")
+            for q in quotes:
+                lines.append(f'> "{q}"')
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _format_action_items_doc(action_items: list) -> str:
+    """Format action items JSON into readable Markdown document."""
+    lines = ["# Action Items\n"]
+    for item in action_items:
+        aid = item.get("id", "ACT-???")
+        lines.append(f"## {aid}\n")
+        lines.append(f"**Action:** {item.get('action', 'N/A')}\n")
+        lines.append(f"- **Assignee:** {item.get('assignee', 'Unassigned')}")
+        lines.append(f"- **Deadline:** {item.get('deadline', 'Not specified')}")
+        lines.append(f"- **Priority:** {item.get('priority', 'N/A')}")
+        lines.append(f"- **Status:** {item.get('status', 'N/A')}")
+        deps = item.get("dependencies", [])
+        if deps:
+            lines.append(f"- **Dependencies:** {', '.join(deps)}")
+        if item.get("context"):
+            lines.append(f"- **Context:** {item['context']}")
+        quotes = item.get("source_quotes", [])
+        if quotes:
+            lines.append("\n**Source Quotes:**")
+            for q in quotes:
+                lines.append(f'> "{q}"')
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _format_decisions_doc(decisions: list) -> str:
+    """Format decisions JSON into readable Markdown document."""
+    lines = ["# Decisions\n"]
+    for dec in decisions:
+        did = dec.get("id", "DEC-???")
+        lines.append(f"## {did}\n")
+        lines.append(f"**Decision:** {dec.get('decision', 'N/A')}\n")
+        lines.append(f"- **Rationale:** {dec.get('rationale', 'N/A')}")
+        lines.append(f"- **Decision Maker:** {dec.get('decision_maker', 'N/A')}")
+        lines.append(f"- **Status:** {dec.get('status', 'N/A')}")
+        lines.append(f"- **Impact:** {dec.get('impact', 'N/A')}")
+        if dec.get("conditions"):
+            lines.append(f"- **Conditions:** {dec['conditions']}")
+        alts = dec.get("alternatives_considered", [])
+        if alts:
+            lines.append(f"- **Alternatives Considered:** {', '.join(alts)}")
+        if dec.get("context"):
+            lines.append(f"- **Context:** {dec['context']}")
+        quotes = dec.get("source_quotes", [])
+        if quotes:
+            lines.append("\n**Source Quotes:**")
+            for q in quotes:
+                lines.append(f'> "{q}"')
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _format_emphasis_points_doc(emphasis_points: list) -> str:
+    """Format emphasis points JSON into readable Markdown document."""
+    lines = ["# Emphasis Points\n"]
+    for emp in emphasis_points:
+        eid = emp.get("id", "EMP-???")
+        lines.append(f"## {eid}\n")
+        lines.append(f"**Point:** {emp.get('point', 'N/A')}\n")
+        lines.append(f"- **Type:** {emp.get('emphasis_type', 'N/A')}")
+        lines.append(f"- **Strength:** {emp.get('strength', 'N/A')}")
+        if emp.get("speaker"):
+            lines.append(f"- **Speaker:** {emp['speaker']}")
+        if emp.get("related_to"):
+            lines.append(f"- **Related To:** {emp['related_to']}")
+        if emp.get("context"):
+            lines.append(f"- **Context:** {emp['context']}")
+        quotes = emp.get("source_quotes", [])
+        if quotes:
+            lines.append("\n**Source Quotes:**")
+            for q in quotes:
+                lines.append(f'> "{q}"')
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _get_stem(formatted_filename: str) -> str:
+    """Extract the clean project stem from a formatted filename."""
+    stem = Path(formatted_filename).stem
+    for suffix_base in [
+        config.SUFFIX_FORMATTED.replace(".md", ""),
+        config.SUFFIX_YAML.replace(".md", ""),
+    ]:
+        if stem.endswith(suffix_base):
+            stem = stem[: -len(suffix_base)]
+    if stem.endswith("_yaml"):
+        stem = stem[:-5]
+    return stem
+
+
+def _run_extraction(
+    prompt_filename: str,
+    formatted_filename: str,
+    model: str,
+    logger,
+    transcript_system_message,
+    extraction_name: str,
+) -> list:
+    """
+    Common extraction logic: load prompt, call Claude with cached transcript, parse JSON.
+    Returns parsed JSON list.
+    """
+    logger.info("Loading prompt: %s", prompt_filename)
+    prompt_template = _load_summary_prompt(prompt_filename)
+
+    call_kwargs = {}
+    if transcript_system_message:
+        # Use cached transcript in system message; send prompt only as user message
+        full_prompt = prompt_template.replace(
+            "{{insert_transcript_text_here}}", ""
+        ).replace(
+            "## Transcript\n\n{{insert_transcript_text_here}}", ""
+        ).strip()
+        call_kwargs["system"] = transcript_system_message
+    else:
+        transcript = _load_formatted_transcript(formatted_filename)
+        full_prompt = prompt_template.replace(
+            "{{insert_transcript_text_here}}", transcript
+        )
+
+    logger.info("Sending %s extraction request to Claude (%s)...", extraction_name, model)
+    response = _generate_summary_with_claude(
+        full_prompt,
+        model,
+        config.TEMP_ANALYSIS,
+        logger,
+        min_length=50,
+        timeout=config.TIMEOUT_SUMMARY,
+        **call_kwargs,
+    )
+
+    items = _parse_json_response(response, logger)
+    logger.info("  Parsed %d %s items from response.", len(items), extraction_name)
+    return items
+
+
+def extract_requirements(
+    formatted_filename: str,
+    model: str = None,
+    logger=None,
+    transcript_system_message=None,
+) -> list:
+    """
+    Extract requirements (user stories) from the formatted transcript.
+    Returns list of requirement dicts and saves JSON + Markdown files.
+    """
+    if model is None:
+        model = config.DEFAULT_MODEL
+    if logger is None:
+        logger = setup_logging("extract_requirements")
+
+    stem = _get_stem(formatted_filename)
+    logger.info("--- Extracting Requirements from: %s ---", formatted_filename)
+
+    try:
+        items = _run_extraction(
+            config.PROMPT_REQUIREMENTS_EXTRACTION_FILENAME,
+            formatted_filename, model, logger,
+            transcript_system_message, "requirements",
+        )
+
+        if not items:
+            logger.warning("No requirements extracted.")
+            return []
+
+        _save_json(items, stem, config.SUFFIX_REQUIREMENTS, logger)
+        doc = _format_requirements_doc(items)
+        _save_doc(doc, stem, config.SUFFIX_REQUIREMENTS_DOC, logger)
+
+        logger.info("✓ Extracted %d requirements.", len(items))
+        return items
+
+    except Exception as e:
+        logger.error("Error extracting requirements: %s", e, exc_info=True)
+        return []
+
+
+def extract_action_items(
+    formatted_filename: str,
+    model: str = None,
+    logger=None,
+    transcript_system_message=None,
+) -> list:
+    """
+    Extract action items from the formatted transcript.
+    Returns list of action item dicts and saves JSON + Markdown files.
+    """
+    if model is None:
+        model = config.DEFAULT_MODEL
+    if logger is None:
+        logger = setup_logging("extract_action_items")
+
+    stem = _get_stem(formatted_filename)
+    logger.info("--- Extracting Action Items from: %s ---", formatted_filename)
+
+    try:
+        items = _run_extraction(
+            config.PROMPT_ACTION_ITEMS_EXTRACTION_FILENAME,
+            formatted_filename, model, logger,
+            transcript_system_message, "action items",
+        )
+
+        if not items:
+            logger.warning("No action items extracted.")
+            return []
+
+        _save_json(items, stem, config.SUFFIX_ACTION_ITEMS, logger)
+        doc = _format_action_items_doc(items)
+        _save_doc(doc, stem, config.SUFFIX_ACTION_ITEMS_DOC, logger)
+
+        logger.info("✓ Extracted %d action items.", len(items))
+        return items
+
+    except Exception as e:
+        logger.error("Error extracting action items: %s", e, exc_info=True)
+        return []
+
+
+def extract_decisions(
+    formatted_filename: str,
+    model: str = None,
+    logger=None,
+    transcript_system_message=None,
+) -> list:
+    """
+    Extract decisions from the formatted transcript.
+    Returns list of decision dicts and saves JSON + Markdown files.
+    """
+    if model is None:
+        model = config.DEFAULT_MODEL
+    if logger is None:
+        logger = setup_logging("extract_decisions")
+
+    stem = _get_stem(formatted_filename)
+    logger.info("--- Extracting Decisions from: %s ---", formatted_filename)
+
+    try:
+        items = _run_extraction(
+            config.PROMPT_DECISIONS_EXTRACTION_FILENAME,
+            formatted_filename, model, logger,
+            transcript_system_message, "decisions",
+        )
+
+        if not items:
+            logger.warning("No decisions extracted.")
+            return []
+
+        _save_json(items, stem, config.SUFFIX_DECISIONS, logger)
+        doc = _format_decisions_doc(items)
+        _save_doc(doc, stem, config.SUFFIX_DECISIONS_DOC, logger)
+
+        logger.info("✓ Extracted %d decisions.", len(items))
+        return items
+
+    except Exception as e:
+        logger.error("Error extracting decisions: %s", e, exc_info=True)
+        return []
+
+
+def extract_emphasis_points(
+    formatted_filename: str,
+    model: str = None,
+    logger=None,
+    transcript_system_message=None,
+) -> list:
+    """
+    Extract emphasis points from the formatted transcript.
+    Returns list of emphasis point dicts and saves JSON + Markdown files.
+    """
+    if model is None:
+        model = config.DEFAULT_MODEL
+    if logger is None:
+        logger = setup_logging("extract_emphasis_points")
+
+    stem = _get_stem(formatted_filename)
+    logger.info("--- Extracting Emphasis Points from: %s ---", formatted_filename)
+
+    try:
+        items = _run_extraction(
+            config.PROMPT_EMPHASIS_POINTS_EXTRACTION_FILENAME,
+            formatted_filename, model, logger,
+            transcript_system_message, "emphasis points",
+        )
+
+        if not items:
+            logger.warning("No emphasis points extracted.")
+            return []
+
+        _save_json(items, stem, config.SUFFIX_EMPHASIS_POINTS, logger)
+        doc = _format_emphasis_points_doc(items)
+        _save_doc(doc, stem, config.SUFFIX_EMPHASIS_POINTS_DOC, logger)
+
+        logger.info("✓ Extracted %d emphasis points.", len(items))
+        return items
+
+    except Exception as e:
+        logger.error("Error extracting emphasis points: %s", e, exc_info=True)
+        return []
+
+
+def process_transcript(
+    formatted_filename: str,
+    model: str = None,
+    skip_topics: bool = False,
+    skip_requirements: bool = False,
+    skip_actions: bool = False,
+    skip_decisions: bool = False,
+    skip_emphasis: bool = False,
+    logger=None,
+) -> dict:
+    """
+    Main orchestrator for the meet2reqs extraction pipeline.
+
+    Processes a formatted transcript through:
+      1. Topics extraction (reuses existing Key Items prompt for topics only)
+      2. Requirements extraction (user stories)
+      3. Action Items extraction
+      4. Decisions extraction
+      5. Emphasis Points extraction
+
+    Uses a single cached transcript system message across all calls for
+    token efficiency.
+
+    Returns dict with all extraction results keyed by type.
+    """
+    if model is None:
+        model = config.DEFAULT_MODEL
+    if logger is None:
+        logger = setup_logging("process_transcript")
+
+    results = {
+        "topics": None,
+        "requirements": [],
+        "action_items": [],
+        "decisions": [],
+        "emphasis_points": [],
+        "enriched_requirements": [],
+    }
+
+    try:
+        if not config.SOURCE_DIR.exists():
+            config.SOURCE_DIR.mkdir(parents=True, exist_ok=True)
+
+        logger.info("=" * 60)
+        logger.info("MEET2REQS: Processing transcript: %s", formatted_filename)
+        logger.info("Model: %s", model)
+        logger.info("=" * 60)
+
+        transcript = _load_formatted_transcript(formatted_filename)
+        metadata = parse_filename_metadata(formatted_filename)
+        stem = metadata["stem"]
+
+        # Create cached system message — reused across ALL extraction calls
+        transcript_system_message = create_system_message_with_cache(transcript)
+        logger.info("Transcript cached for reuse (%d words).", len(transcript.split()))
+
+        # --- STEP 1: Topics Extraction ---
+        if not skip_topics:
+            logger.info("\n--- STEP 1: Extracting Topics ---")
+            prompt_template = _load_summary_prompt(config.PROMPT_EXTRACTS_FILENAME)
+            prompt = _fill_prompt_template(
+                prompt_template, metadata, transcript="",
+                target_audience="stakeholders and project team",
+            )
+
+            transcript_word_count = len(transcript.split())
+            min_expected_words = int(transcript_word_count * config.MIN_EXTRACTS_PERCENT)
+            min_expected_words = (
+                max(min_expected_words, config.MIN_EXTRACTS_WORDS_FLOOR)
+                if transcript_word_count > config.MIN_TRANSCRIPT_WORDS_FOR_FLOOR
+                else config.MIN_EXTRACTS_WORDS_ABSOLUTE
+            )
+
+            output = _generate_summary_with_claude(
+                prompt, model, config.TEMP_ANALYSIS, logger,
+                min_length=config.MIN_EXTRACTS_CHARS,
+                min_words=min_expected_words,
+                system=transcript_system_message,
+            )
+            output = _normalize_headers(output)
+
+            all_key_items_path = _save_summary(output, formatted_filename, "All Key Items")
+            logger.info("✓ Key Items saved to: %s", all_key_items_path)
+            _process_key_items_output(all_key_items_path, logger)
+
+            topics = extract_section(output, "Topics")
+            results["topics"] = topics
+        else:
+            logger.info("Skipping topics extraction.")
+            # Try loading existing topics
+            potential = config.PROJECTS_DIR / stem / f"{stem}{config.SUFFIX_KEY_ITEMS_ALL}"
+            if potential.exists():
+                content = strip_yaml_frontmatter(potential.read_text(encoding="utf-8"))
+                results["topics"] = extract_section(content, "Topics")
+                logger.info("Loaded existing topics from: %s", potential.name)
+
+        # --- STEP 2: Requirements Extraction ---
+        if not skip_requirements:
+            logger.info("\n--- STEP 2: Extracting Requirements ---")
+            results["requirements"] = extract_requirements(
+                formatted_filename, model, logger, transcript_system_message,
+            )
+
+        # --- STEP 3: Action Items Extraction ---
+        if not skip_actions:
+            logger.info("\n--- STEP 3: Extracting Action Items ---")
+            results["action_items"] = extract_action_items(
+                formatted_filename, model, logger, transcript_system_message,
+            )
+
+        # --- STEP 4: Decisions Extraction ---
+        if not skip_decisions:
+            logger.info("\n--- STEP 4: Extracting Decisions ---")
+            results["decisions"] = extract_decisions(
+                formatted_filename, model, logger, transcript_system_message,
+            )
+
+        # --- STEP 5: Emphasis Points Extraction ---
+        if not skip_emphasis:
+            logger.info("\n--- STEP 5: Extracting Emphasis Points ---")
+            results["emphasis_points"] = extract_emphasis_points(
+                formatted_filename, model, logger, transcript_system_message,
+            )
+
+        # --- STEP 6: Enrich Requirements ---
+        if results["requirements"] and not skip_requirements:
+            logger.info("\n--- STEP 6: Enriching Requirements ---")
+            enriched = enrichment_pipeline.enrich_requirements(
+                results["requirements"], model, logger, transcript_system_message,
+            )
+            if enriched:
+                results["enriched_requirements"] = enriched
+                enrichment_pipeline.save_enriched_requirements(enriched, stem, logger)
+
+        # --- STEP 7: Validate Extractions ---
+        logger.info("\n--- STEP 7: Validating Extractions ---")
+        from validation_pipeline import validate_extraction
+        validation_report = validate_extraction(
+            base_name=stem,
+            extraction_results=results,
+            logger=logger,
+        )
+        results["validation"] = validation_report
+
+        # --- Summary ---
+        logger.info("\n" + "=" * 60)
+        logger.info("MEET2REQS: Processing Complete")
+        logger.info("  Requirements:  %d", len(results["requirements"]))
+        if results.get("enriched_requirements"):
+            logger.info("  Enriched:      %d (with acceptance criteria)", len(results["enriched_requirements"]))
+        logger.info("  Action Items:  %d", len(results["action_items"]))
+        logger.info("  Decisions:     %d", len(results["decisions"]))
+        logger.info("  Emphasis:      %d", len(results["emphasis_points"]))
+        rec = validation_report.get("overall", {}).get("recommendation", "n/a")
+        logger.info("  Validation:    %s", rec.upper())
+        logger.info("=" * 60)
+
+        return results
+
+    except Exception as e:
+        logger.error("Error in process_transcript: %s", e, exc_info=True)
+        return results
