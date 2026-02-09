@@ -8,6 +8,7 @@ from pathlib import Path
 import anthropic
 
 import config
+import enrichment_pipeline
 
 # Legacy imports — kept for backward compatibility with old pipeline
 try:
@@ -1141,6 +1142,7 @@ def process_transcript(
         "action_items": [],
         "decisions": [],
         "emphasis_points": [],
+        "enriched_requirements": [],
     }
 
     try:
@@ -1228,13 +1230,25 @@ def process_transcript(
                 formatted_filename, model, logger, transcript_system_message,
             )
 
+        # --- STEP 6: Enrich Requirements ---
+        if results["requirements"] and not skip_requirements:
+            logger.info("\n--- STEP 6: Enriching Requirements ---")
+            enriched = enrichment_pipeline.enrich_requirements(
+                results["requirements"], model, logger, transcript_system_message,
+            )
+            if enriched:
+                results["enriched_requirements"] = enriched
+                enrichment_pipeline.save_enriched_requirements(enriched, stem, logger)
+
         # --- Summary ---
         logger.info("\n" + "=" * 60)
         logger.info("MEET2REQS: Extraction Complete")
-        logger.info("  Requirements: %d", len(results["requirements"]))
-        logger.info("  Action Items: %d", len(results["action_items"]))
-        logger.info("  Decisions:    %d", len(results["decisions"]))
-        logger.info("  Emphasis:     %d", len(results["emphasis_points"]))
+        logger.info("  Requirements:  %d", len(results["requirements"]))
+        if results.get("enriched_requirements"):
+            logger.info("  Enriched:      %d (with acceptance criteria)", len(results["enriched_requirements"]))
+        logger.info("  Action Items:  %d", len(results["action_items"]))
+        logger.info("  Decisions:     %d", len(results["decisions"]))
+        logger.info("  Emphasis:      %d", len(results["emphasis_points"]))
         logger.info("=" * 60)
 
         return results
