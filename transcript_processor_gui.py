@@ -321,7 +321,7 @@ class TranscriptProcessorGUI:
         button_frame = ttk.Frame(main_frame)
         button_frame.grid(row=6, column=0, sticky=(tk.W, tk.E)) # MODIFIED row from 5 to 6
 
-        # Row 1 (buttons remain in button_frame)
+        # Row 0: Formatting pipeline
         self.init_val_btn = ttk.Button(
             button_frame, text="0. Init Val", command=self.do_initial_validation, state=tk.DISABLED)
         self.init_val_btn.grid(row=0, column=0, padx=(0, 5), pady=2)
@@ -338,69 +338,69 @@ class TranscriptProcessorGUI:
             button_frame, text="3. YAML", command=self.do_add_yaml, state=tk.DISABLED)
         self.yaml_btn.grid(row=0, column=3, padx=(0, 5), pady=2)
 
-        self.summary_btn = ttk.Button(
-            button_frame, text="4. Key Items", command=self.do_summaries, state=tk.DISABLED)
-        self.summary_btn.grid(row=0, column=4, padx=(0, 5), pady=2)
-
         self.cost_btn = ttk.Button(
             button_frame, text="Est. Cost", command=self.do_estimate_cost, state=tk.DISABLED)
-        self.cost_btn.grid(row=0, column=5, padx=(0, 5), pady=2)
+        self.cost_btn.grid(row=0, column=4, padx=(0, 5), pady=2)
 
-        # Row 2
-        self.gen_summary_btn = ttk.Button(
-            button_frame, text="5. Gen Summary", command=self.do_generate_structured_summary, state=tk.DISABLED)
-        self.gen_summary_btn.grid(row=1, column=0, padx=(0, 5), pady=2)
+        # Row 1: meet2reqs extraction pipeline
+        self.extract_all_btn = ttk.Button(
+            button_frame, text="4. Extract All", command=self.do_extract_all, state=tk.DISABLED)
+        self.extract_all_btn.grid(row=1, column=0, padx=(0, 5), pady=2)
 
-        self.val_summary_btn = ttk.Button(
-            button_frame, text="6. Val Summary", command=self.do_validate_summary, state=tk.DISABLED)
-        self.val_summary_btn.grid(row=1, column=1, padx=(0, 5), pady=2)
+        self.reqs_btn = ttk.Button(
+            button_frame, text="Requirements", command=self.do_extract_requirements, state=tk.DISABLED)
+        self.reqs_btn.grid(row=1, column=1, padx=(0, 5), pady=2)
 
-        self.gen_abstract_btn = ttk.Button(
-            button_frame, text="7. Gen Abstract", command=self.do_generate_structured_abstract, state=tk.DISABLED)
-        self.gen_abstract_btn.grid(row=1, column=2, padx=(0, 5), pady=2)
+        self.actions_btn = ttk.Button(
+            button_frame, text="Actions", command=self.do_extract_actions, state=tk.DISABLED)
+        self.actions_btn.grid(row=1, column=2, padx=(0, 5), pady=2)
 
-        self.abstracts_btn = ttk.Button(
-            button_frame, text="8. Val Abstract", command=self.do_validate_abstracts, state=tk.DISABLED)
-        self.abstracts_btn.grid(row=1, column=3, padx=(0, 5), pady=2)
+        self.decisions_btn = ttk.Button(
+            button_frame, text="Decisions", command=self.do_extract_decisions, state=tk.DISABLED)
+        self.decisions_btn.grid(row=1, column=3, padx=(0, 5), pady=2)
+
+        self.emphasis_btn = ttk.Button(
+            button_frame, text="Emphasis", command=self.do_extract_emphasis_points, state=tk.DISABLED)
+        self.emphasis_btn.grid(row=1, column=4, padx=(0, 5), pady=2)
+
+        # Row 2: Enrichment, validation, output
+        self.enrich_btn = ttk.Button(
+            button_frame, text="5. Enrich Reqs", command=self.do_enrich_requirements, state=tk.DISABLED)
+        self.enrich_btn.grid(row=2, column=0, padx=(0, 5), pady=2)
+
+        self.validate_btn = ttk.Button(
+            button_frame, text="6. Validate", command=self.do_validate_extractions, state=tk.DISABLED)
+        self.validate_btn.grid(row=2, column=1, padx=(0, 5), pady=2)
+
+        self.pdf_btn = ttk.Button(
+            button_frame, text="7. PDF", command=self.do_generate_pdf, state=tk.DISABLED)
+        self.pdf_btn.grid(row=2, column=2, padx=(0, 5), pady=2)
+
+        self.package_btn = ttk.Button(
+            button_frame, text="8. Package", command=self.do_package, state=tk.DISABLED)
+        self.package_btn.grid(row=2, column=3, padx=(0, 5), pady=2)
 
         self.config_btn = ttk.Button(
             button_frame, text="Config Check", command=self.do_config_check)
-        self.config_btn.grid(row=1, column=4, padx=(0, 5), pady=2)
+        self.config_btn.grid(row=2, column=4, padx=(0, 5), pady=2)
 
-        # Row 3
-        self.blog_btn = ttk.Button(
-            button_frame, text="9. Blog", command=self.do_generate_blog, state=tk.DISABLED)
-        self.blog_btn.grid(row=2, column=0, padx=(0, 5), pady=2)
-
-        self.webpdf_btn = ttk.Button(
-            button_frame, text="10. Web/PDF", command=self.do_generate_web_pdf, state=tk.DISABLED)
-        self.webpdf_btn.grid(row=2, column=1, padx=(0, 5), pady=2)
-
-        self.emphasis_btn = ttk.Button(
-            button_frame, text="Emphasis", command=self.do_extract_emphasis, state=tk.DISABLED)
-        self.emphasis_btn.grid(row=2, column=2, padx=(0, 5), pady=2)
-
-        self.package_btn = ttk.Button(
-            button_frame, text="Package", command=self.do_package, state=tk.DISABLED)
-        self.package_btn.grid(row=2, column=3, padx=(0, 5), pady=2)
-
+        # Row 3: Utilities
         self.clean_logs_btn = ttk.Button(
             button_frame, text="Clean Logs...", command=self.do_clean_logs)
-        self.clean_logs_btn.grid(row=2, column=4, padx=(0, 5), pady=2)
+        self.clean_logs_btn.grid(row=3, column=0, padx=(0, 5), pady=2)
 
         self.clear_btn = ttk.Button(
             button_frame, text="Clear Log", command=self.clear_log)
-        self.clear_btn.grid(row=2, column=5, padx=(0, 5), pady=2)
+        self.clear_btn.grid(row=3, column=1, padx=(0, 5), pady=2)
+
+        self.cleanup_btn = ttk.Button(
+            button_frame, text="Cleanup Source", command=self.do_cleanup, state=tk.DISABLED)
+        self.cleanup_btn.grid(row=3, column=2, padx=(0, 5), pady=2)
 
         self.do_all_btn = ttk.Button(
             button_frame, text="▶ DO ALL STEPS", command=self.do_all_steps, state=tk.DISABLED)
-        self.do_all_btn.grid(row=0, column=6, rowspan=3,
+        self.do_all_btn.grid(row=0, column=6, rowspan=4,
                              padx=(10, 5), sticky=(tk.N, tk.S))
-
-        # Row 3 (Maintenance)
-        self.cleanup_btn = ttk.Button(
-            button_frame, text="Cleanup Source", command=self.do_cleanup, state=tk.DISABLED)
-        self.cleanup_btn.grid(row=3, column=0, padx=(0, 5), pady=2)
 
         self.status_label = ttk.Label(
             main_frame, text="Ready", foreground="green")
@@ -551,25 +551,20 @@ class TranscriptProcessorGUI:
             ("Header Val", project_dir /
              f"{base}{config.SUFFIX_HEADER_VAL_REPORT}"),
             ("YAML", project_dir / f"{base}{config.SUFFIX_YAML}"),
-            ("Topics, Themes, Terms", project_dir /
-             f"{base}{config.SUFFIX_KEY_ITEMS_CLEAN}"),
-            ("Scored Emphasis", project_dir /
-             f"{base}{config.SUFFIX_EMPHASIS_SCORED}"),
-            ("Bowen References", project_dir /
-             f"{base}{config.SUFFIX_BOWEN}"),
-            ("Gen Summary", project_dir /
-             f"{base}{config.SUFFIX_SUMMARY_GEN}"),
-            ("Summary Val", project_dir /
-             f"{base}{config.SUFFIX_SUMMARY_VAL}"),
-            ("Gen Abstract", project_dir /
-             f"{base}{config.SUFFIX_ABSTRACT_GEN}"),
-            ("Abstracts Val", project_dir /
-             f"{base}{config.SUFFIX_ABSTRACT_VAL}"),
-            ("Blog", project_dir / f"{base}{config.SUFFIX_BLOG}"),
-            ("Webpage", project_dir /
-             f"{base}{config.SUFFIX_WEBPAGE}"),
-            ("Simple Web", project_dir /
-             f"{base}{config.SUFFIX_WEBPAGE_SIMPLE}"),
+            ("Topics", project_dir /
+             f"{base}{config.SUFFIX_KEY_ITEMS_ALL}"),
+            ("Requirements", project_dir /
+             f"{base}{config.SUFFIX_REQUIREMENTS}"),
+            ("Enriched Reqs", project_dir /
+             f"{base}{config.SUFFIX_ENRICHED_REQUIREMENTS}"),
+            ("Action Items", project_dir /
+             f"{base}{config.SUFFIX_ACTION_ITEMS}"),
+            ("Decisions", project_dir /
+             f"{base}{config.SUFFIX_DECISIONS}"),
+            ("Emphasis Pts", project_dir /
+             f"{base}{config.SUFFIX_EMPHASIS_POINTS}"),
+            ("Validation", project_dir /
+             f"{base} - extraction-validation.md"),
             ("PDF", project_dir / f"{base}{config.SUFFIX_PDF}"),
             ("Package", project_dir / f"{base}.zip"),
         ]
@@ -835,68 +830,139 @@ class TranscriptProcessorGUI:
         self.run_task_in_thread(
             pipeline.add_yaml, self.formatted_file.name, "mp4", self.logger) # No model parameter here
 
-    def do_summaries(self):
-        """Generate Key Items, Bowen References, and initial Blog Post."""
-        yaml_file = (config.PROJECTS_DIR / self.base_name /
-                     f"{self.base_name}{config.SUFFIX_YAML}")
-        if not yaml_file.exists():
-            if self.formatted_file.exists():
-                with open(self.formatted_file, 'r', encoding='utf-8') as f:
-                    # A simple check for YAML front matter
-                    if not f.read(10).startswith('---'):
-                        messagebox.showwarning(
-                            "Not Ready", "Please add YAML front matter first.")
-                        return
-            else:
-                messagebox.showwarning(
-                    "Not Ready", "Please format and add YAML first.")
-                return
-        self.log("STEP 3: Key Items...")
+    def _get_input_file(self):
+        """Get the best available input file for extraction (YAML > formatted)."""
+        yaml_file = f"{self.base_name}{config.SUFFIX_YAML}"
+        if (config.PROJECTS_DIR / self.base_name / yaml_file).exists():
+            return yaml_file
+        formatted_file = f"{self.base_name}{config.SUFFIX_FORMATTED}"
+        if (config.PROJECTS_DIR / self.base_name / formatted_file).exists():
+            return formatted_file
+        return None
+
+    def do_extract_all(self):
+        """Run the full meet2reqs extraction pipeline (topics + all extractions + enrichment + validation)."""
+        if not self.base_name:
+            return
+        input_file = self._get_input_file()
+        if not input_file:
+            messagebox.showwarning("Not Ready", "Please format the transcript first.")
+            return
+        self.log("STEP 4: Running full extraction pipeline...")
         self.run_task_in_thread(
-            pipeline.summarize_transcript,
-            f"{self.base_name}{config.SUFFIX_YAML}",
-            config.settings.DEFAULT_MODEL, # MODIFIED
-            "Family Systems",
-            "General public",
-            False,  # skip_extracts_summary
-            False,  # skip_emphasis
-            True,   # skip_blog
+            pipeline.process_transcript,
+            input_file,
+            config.settings.DEFAULT_MODEL,
             logger=self.logger,
-            task_name="Key Item Generation",
+            task_name="Full Extraction Pipeline",
         )
 
-    def do_generate_structured_summary(self):
-        """Generate a structured summary from the extracted Key Items."""
+    def do_extract_requirements(self):
+        """Extract requirements (user stories) from the transcript."""
         if not self.base_name:
             return
-        self.log("STEP 4: Generating Structured Summary...")
+        input_file = self._get_input_file()
+        if not input_file:
+            messagebox.showwarning("Not Ready", "Please format the transcript first.")
+            return
+        self.log("Extracting Requirements...")
         self.run_task_in_thread(
-            pipeline.generate_structured_summary, self.base_name, config.DEFAULT_SUMMARY_WORD_COUNT, self.logger, model=config.settings.DEFAULT_MODEL)  # Use Sonnet for summaries
+            pipeline.extract_requirements, input_file,
+            config.settings.DEFAULT_MODEL, self.logger,
+            task_name="Requirements Extraction",
+        )
 
-    def do_validate_summary(self):
-        """Validate the generated summary for coverage and proportions."""
+    def do_extract_actions(self):
+        """Extract action items from the transcript."""
         if not self.base_name:
             return
-        self.log("STEP 5: Validating Summary (Coverage & Proportion)...")
+        input_file = self._get_input_file()
+        if not input_file:
+            messagebox.showwarning("Not Ready", "Please format the transcript first.")
+            return
+        self.log("Extracting Action Items...")
         self.run_task_in_thread(
-            pipeline.validate_summary_coverage, self.base_name, self.logger, model=config.settings.AUX_MODEL) # MODIFIED
+            pipeline.extract_action_items, input_file,
+            config.settings.DEFAULT_MODEL, self.logger,
+            task_name="Action Items Extraction",
+        )
 
-    def do_generate_blog(self):
-        """Generate a blog post from the transcript."""
+    def do_extract_decisions(self):
+        """Extract decisions from the transcript."""
         if not self.base_name:
             return
-        self.log("STEP 8: Generating Blog Post...")
+        input_file = self._get_input_file()
+        if not input_file:
+            messagebox.showwarning("Not Ready", "Please format the transcript first.")
+            return
+        self.log("Extracting Decisions...")
         self.run_task_in_thread(
-            pipeline.summarize_transcript,
-            f"{self.base_name}{config.SUFFIX_YAML}",
-            config.settings.DEFAULT_MODEL, # MODIFIED
-            "Family Systems",
-            "General public",
-            True,   # skip_extracts_summary
-            True,   # skip_emphasis
-            False,  # skip_blog
-            logger=self.logger,
-            task_name="Blog Post generation",
+            pipeline.extract_decisions, input_file,
+            config.settings.DEFAULT_MODEL, self.logger,
+            task_name="Decisions Extraction",
+        )
+
+    def do_extract_emphasis_points(self):
+        """Extract emphasis points from the transcript."""
+        if not self.base_name:
+            return
+        input_file = self._get_input_file()
+        if not input_file:
+            messagebox.showwarning("Not Ready", "Please format the transcript first.")
+            return
+        self.log("Extracting Emphasis Points...")
+        self.run_task_in_thread(
+            pipeline.extract_emphasis_points, input_file,
+            config.settings.DEFAULT_MODEL, self.logger,
+            task_name="Emphasis Points Extraction",
+        )
+
+    def do_enrich_requirements(self):
+        """Enrich extracted requirements with acceptance criteria."""
+        if not self.base_name:
+            return
+        import json
+        reqs_path = config.PROJECTS_DIR / self.base_name / f"{self.base_name}{config.SUFFIX_REQUIREMENTS}"
+        if not reqs_path.exists():
+            messagebox.showwarning("Not Ready", "Please extract requirements first.")
+            return
+        self.log("STEP 5: Enriching Requirements...")
+        try:
+            requirements = json.loads(reqs_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            self.log("Error loading requirements: %s", e)
+            return
+        self.run_task_in_thread(
+            self._run_enrich_requirements, requirements,
+            task_name="Requirements Enrichment",
+        )
+
+    def _run_enrich_requirements(self, requirements):
+        enriched = pipeline.enrich_requirements(
+            requirements, config.settings.DEFAULT_MODEL, self.logger)
+        if enriched:
+            pipeline.save_enriched_requirements(enriched, self.base_name, self.logger)
+            self.log("Enrichment complete: %d requirements enriched.", len(enriched))
+        return bool(enriched)
+
+    def do_validate_extractions(self):
+        """Validate all extracted items against the transcript."""
+        if not self.base_name:
+            return
+        self.log("STEP 6: Validating Extractions...")
+        self.run_task_in_thread(
+            pipeline.validate_extraction, self.base_name, logger=self.logger,
+            task_name="Extraction Validation",
+        )
+
+    def do_generate_pdf(self):
+        """Generate PDF from extraction results."""
+        if not self.base_name:
+            return
+        self.log("STEP 7: Generating PDF...")
+        self.run_task_in_thread(
+            pipeline.generate_pdf, self.base_name, logger=self.logger,
+            task_name="PDF Generation",
         )
 
     def do_estimate_cost(self):
@@ -932,73 +998,10 @@ class TranscriptProcessorGUI:
             self.log(f"❌ Error checking config: {e}")
             return False
 
+    # Legacy methods kept as stubs for backward compatibility
     def do_extract_emphasis(self):
-        """Extract scored emphasis items from the transcript."""
-        if not self.base_name:
-            return
-
-        # Determine input file (prefer YAML version)
-        input_file = f"{self.base_name}{config.SUFFIX_YAML}"
-        if not (config.PROJECTS_DIR / self.base_name / input_file).exists():
-            input_file = f"{self.base_name}{config.SUFFIX_FORMATTED}"
-            if not (config.PROJECTS_DIR / self.base_name / input_file).exists():
-                messagebox.showwarning(
-                    "Not Ready", "Please format the transcript first.")
-                return
-
-        self.log("STEP: Extracting Scored Emphasis...")
-        self.run_task_in_thread(
-            pipeline.extract_scored_emphasis, input_file, config.settings.DEFAULT_MODEL, self.logger) # MODIFIED
-
-    def do_generate_structured_abstract(self):
-        """Generate a structured abstract from the transcript."""
-        if not self.base_name:
-            return
-        self.log("STEP 6: Generating Structured Abstract...")
-        self.run_task_in_thread(
-            pipeline.generate_structured_abstract, self.base_name, self.logger, model=config.settings.DEFAULT_MODEL)  # Use Sonnet for abstracts
-
-    def do_validate_abstracts(self):
-        """Validate the generated abstract for coverage."""
-        if not self.base_name:
-            return
-        self.log("STEP 7: Validating Abstracts (Coverage Check)...")
-        # Using the new validation pipeline
-        self.run_task_in_thread(
-            pipeline.validate_abstract_coverage, self.base_name, self.logger, model=config.settings.AUX_MODEL) # MODIFIED
-
-    def do_generate_web_pdf(self):
-        """Generate Webpage and PDF artifacts."""
-        if not self.base_name:
-            return
-        self.log("STEP 9: Creating Web & PDF...")
-        self.run_task_in_thread(self._run_web_pdf_generation)
-
-    def _run_web_pdf_generation(self):
-        success = True
-        self.log("  - Generating simple webpage...")
-        if not pipeline.generate_simple_webpage(self.base_name):
-            self.log("  - Simple webpage generation failed.")
-            success = False
-        self.log("  - Generating main webpage...")
-        if not pipeline.generate_webpage(self.base_name):
-            self.log("  - Main webpage generation failed.")
-            success = False
-        self.log("  - Generating PDF...")
-        if not pipeline.generate_pdf(self.base_name):
-            self.log("  - PDF generation failed.")
-            success = False
-
-        self.log("  - Validating generated webpages...")
-        f = io.StringIO()
-        with redirect_stdout(f):
-            transcript_validate_webpage.validate_webpage(
-                self.base_name, simple_mode=False)
-
-        validation_output = f.getvalue()
-        self.log(validation_output)
-        print(validation_output)
-        return success
+        """Legacy: redirects to new emphasis points extraction."""
+        self.do_extract_emphasis_points()
 
     def do_package(self):
         """Package all generated artifacts into a ZIP file."""
@@ -1088,93 +1091,74 @@ class TranscriptProcessorGUI:
 
     def _run_all_steps(self):
         start_time = datetime.now()
+
         # Step 1: Format & Validate
         self.log("\n--- STEP 1: Formatting ---")
-        # Use config.settings.FORMATTING_MODEL
-        if not pipeline.format_transcript(self.selected_file.name, logger=self.logger, model=config.settings.FORMATTING_MODEL): # MODIFIED
+        if not pipeline.format_transcript(self.selected_file.name, logger=self.logger, model=config.settings.FORMATTING_MODEL):
             return False
 
         # Step 1b: Header Validation
         self.log("\n--- STEP 1b: Header Validation ---")
-        # Use config.settings.AUX_MODEL
-        if not self._run_header_validation(): # Calls _run_header_validation, which uses AUX_MODEL
-            self.log("⚠️ Header validation failed or found issues.")
+        if not self._run_header_validation():
+            self.log("Warning: Header validation failed or found issues.")
 
         # Step 2: Add YAML
         self.log("\n--- STEP 2: Adding YAML ---")
         if not pipeline.add_yaml(self.formatted_file.name, "mp4", self.logger):
             return False
 
-        # Step 3: Extracts (Summaries)
-        self.log("\n--- STEP 3: Extracts & Terms ---")
-        # Run all parts (skips=False)
-        if not pipeline.summarize_transcript(f"{self.base_name}{config.SUFFIX_YAML}",
-                                             config.settings.DEFAULT_MODEL, # MODIFIED
-                                             "Family Systems", "General public",
-                                             False, False, False, logger=self.logger):
-            return False
+        # Step 3: Full meet2reqs extraction pipeline
+        # (Topics + Requirements + Actions + Decisions + Emphasis + Enrichment + Validation)
+        self.log("\n--- STEP 3: meet2reqs Extraction Pipeline ---")
+        input_file = f"{self.base_name}{config.SUFFIX_YAML}"
+        results = pipeline.process_transcript(
+            input_file,
+            config.settings.DEFAULT_MODEL,
+            logger=self.logger,
+        )
 
-        # Step 4: Generate Summary
-        self.log("\n--- STEP 4: Generate Structured Summary ---")
-        if not pipeline.generate_structured_summary(self.base_name, config.DEFAULT_SUMMARY_WORD_COUNT, self.logger, model=config.settings.DEFAULT_MODEL):  # Use Sonnet for summaries
-            self.log("⚠️ Summary generation failed or skipped.")
+        if not results.get("requirements") and not results.get("action_items") and not results.get("decisions"):
+            self.log("Warning: No requirements, actions, or decisions extracted.")
 
-        # Step 5: Validate Summary
-        self.log("\n--- STEP 5: Validate Summary ---")
-        pipeline.validate_summary_coverage(self.base_name, self.logger, model=config.settings.AUX_MODEL)  # Haiku is fine for validation
+        # Step 4: Generate PDF
+        self.log("\n--- STEP 4: Generating PDF ---")
+        pipeline.generate_pdf(self.base_name, extraction_results=results, logger=self.logger)
 
-        # Step 6: Generate Abstract
-        self.log("\n--- STEP 6: Generate Structured Abstract ---")
-        if not pipeline.generate_structured_abstract(self.base_name, self.logger, model=config.settings.DEFAULT_MODEL):  # Use Sonnet for abstracts
-            self.log("⚠️ Abstract generation failed or skipped.")
-
-        # Step 7: Validate Abstracts
-        self.log("\n--- STEP 7: Validating Abstracts ---")
-        pipeline.validate_abstract_coverage(self.base_name, self.logger, model=config.settings.AUX_MODEL) # MODIFIED
-
-        # Step 8: Blog (Already done in Step 3 if skips=False, but let's be explicit)
-        # Actually Step 3 generated Blog too. We can leave it or regenerate.
-        # Let's assume Step 3 covered it.
-
-        # Step 9: Web & PDF
-        self.log("\n--- STEP 9: Web & PDF ---")
-        if not self._run_web_pdf_generation():
-            return False
-
-        # Step 10: Package
-        self.log("\n--- STEP 10: Packaging ---")
+        # Step 5: Package
+        self.log("\n--- STEP 5: Packaging ---")
         pipeline.package_transcript(self.base_name, self.logger)
 
-        # Step 11: Token Usage Report
+        # Token Usage Report
         self.log("\n--- Token Usage Report ---")
         self.log(analyze_token_usage.generate_usage_report(
             since_timestamp=start_time))
 
-        self.log("\n✅ FULL PIPELINE COMPLETE!")
+        self.log("\nFULL PIPELINE COMPLETE!")
         return True
 
     def update_button_states(self):
         state = tk.NORMAL if not self.processing and self.selected_file else tk.DISABLED
+        # Formatting pipeline
         self.init_val_btn.config(state=state)
         self.format_btn.config(state=state)
         self.headers_btn.config(state=state)
         self.yaml_btn.config(state=state)
-        self.summary_btn.config(state=state)
-        self.gen_summary_btn.config(state=state)
-        self.val_summary_btn.config(state=state)
-        self.blog_btn.config(state=state)
-        self.gen_abstract_btn.config(state=state)
-        self.abstracts_btn.config(state=state)
-        self.webpdf_btn.config(state=state)
-        self.emphasis_btn.config(state=state)
         self.cost_btn.config(state=state)
-        self.cleanup_btn.config(state=state) # ADDED
-        # Config check button is always enabled
+        # meet2reqs extraction pipeline
+        self.extract_all_btn.config(state=state)
+        self.reqs_btn.config(state=state)
+        self.actions_btn.config(state=state)
+        self.decisions_btn.config(state=state)
+        self.emphasis_btn.config(state=state)
+        self.enrich_btn.config(state=state)
+        self.validate_btn.config(state=state)
+        self.pdf_btn.config(state=state)
         self.package_btn.config(state=state)
+        self.cleanup_btn.config(state=state)
         self.do_all_btn.config(
             state=tk.NORMAL if self.selected_file else tk.DISABLED)
-        
-        # ADDED: Update state of model comboboxes
+
+        # Model comboboxes
         model_cb_state = "readonly" if not self.processing else tk.DISABLED
         self.default_model_cb.config(state=model_cb_state)
         self.aux_model_cb.config(state=model_cb_state)
