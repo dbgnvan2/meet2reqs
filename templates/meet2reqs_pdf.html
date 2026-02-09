@@ -1,0 +1,290 @@
+{% extends "base.html" %}
+
+{% block styles %}
+{{ common_css }}
+{{ pdf_css }}
+
+/* meet2reqs-specific styles */
+.req-card, .action-card, .decision-card, .emphasis-card {
+    margin: 12pt 0;
+    padding: 12pt;
+    border-left: 4px solid #2c3e50;
+    background: #f8f9fa;
+    page-break-inside: avoid;
+}
+
+.req-card { border-left-color: #2980b9; }
+.action-card { border-left-color: #27ae60; }
+.decision-card { border-left-color: #8e44ad; }
+.emphasis-card { border-left-color: #e67e22; }
+
+.card-header {
+    font-size: 13pt;
+    font-weight: bold;
+    margin-bottom: 6pt;
+    color: #2c3e50;
+}
+
+.card-meta {
+    font-size: 10pt;
+    color: #555;
+    margin: 4pt 0;
+}
+
+.card-meta strong {
+    color: #333;
+}
+
+.source-quote {
+    font-style: italic;
+    font-size: 10pt;
+    color: #555;
+    margin: 6pt 0 6pt 12pt;
+    padding-left: 8pt;
+    border-left: 2px solid #bdc3c7;
+}
+
+.ac-list {
+    margin: 6pt 0 6pt 12pt;
+    font-size: 10pt;
+}
+
+.ac-item {
+    margin: 6pt 0;
+    padding: 6pt;
+    background: #eef;
+    page-break-inside: avoid;
+}
+
+.ac-item .given, .ac-item .when, .ac-item .then {
+    margin: 2pt 0;
+}
+
+.fr-list {
+    margin: 6pt 0 6pt 12pt;
+    font-size: 10pt;
+}
+
+.priority-high { color: #c0392b; font-weight: bold; }
+.priority-medium { color: #f39c12; }
+.priority-low { color: #27ae60; }
+
+.status-badge {
+    display: inline-block;
+    padding: 1pt 6pt;
+    font-size: 9pt;
+    border-radius: 3pt;
+    background: #ecf0f1;
+    color: #2c3e50;
+}
+
+.validation-summary {
+    margin: 12pt 0;
+    padding: 12pt;
+    background: #f0f8ff;
+    border: 1px solid #b8daff;
+}
+
+.section-count {
+    font-size: 10pt;
+    color: #666;
+    margin-bottom: 12pt;
+}
+{% endblock %}
+
+{% block body %}
+<div class="cover">
+    <h1>{{ meta.title }}</h1>
+    <div class="meta">
+        <p><strong>{{ meta.author }}</strong></p>
+        <p>{{ meta.date }}</p>
+        <p style="margin-top: 24pt; font-size: 10pt; color: #666;">Meeting Transcript Analysis</p>
+    </div>
+    <div class="toc">
+        <h2>Contents</h2>
+        <ol>
+            {% if topics %}<li>Topics</li>{% endif %}
+            {% if requirements %}<li>Requirements ({{ requirements|length }})</li>{% endif %}
+            {% if enriched_requirements %}<li>Enriched Requirements with Acceptance Criteria</li>{% endif %}
+            {% if action_items %}<li>Action Items ({{ action_items|length }})</li>{% endif %}
+            {% if decisions %}<li>Decisions ({{ decisions|length }})</li>{% endif %}
+            {% if emphasis_points %}<li>Emphasis Points ({{ emphasis_points|length }})</li>{% endif %}
+            {% if validation %}<li>Validation Summary</li>{% endif %}
+        </ol>
+    </div>
+</div>
+
+{% if topics %}
+<div class="section">
+    <h1>Topics</h1>
+    <div class="metadata-section">
+        {{ topics_html|safe }}
+    </div>
+</div>
+{% endif %}
+
+{% if enriched_requirements %}
+<div class="section">
+    <h1>Requirements</h1>
+    <p class="section-count">{{ enriched_requirements|length }} requirement(s) extracted and enriched</p>
+
+    {% for req in enriched_requirements %}
+    <div class="req-card">
+        <div class="card-header">{{ req.id }}: {{ req.user_story }}</div>
+        <div class="card-meta">
+            <strong>Role:</strong> {{ req.role or 'N/A' }} |
+            <strong>Priority:</strong> <span class="priority-{{ req.priority or 'medium' }}">{{ req.priority or 'N/A' }}</span> |
+            <span class="status-badge">{{ req.status or 'N/A' }}</span>
+        </div>
+        {% if req.context %}
+        <div class="card-meta"><strong>Context:</strong> {{ req.context }}</div>
+        {% endif %}
+
+        {% if req.acceptance_criteria %}
+        <div class="ac-list">
+            <strong>Acceptance Criteria:</strong>
+            {% for ac in req.acceptance_criteria %}
+            <div class="ac-item">
+                <div class="given"><strong>Given</strong> {{ ac.given }}</div>
+                <div class="when"><strong>When</strong> {{ ac.when }}</div>
+                <div class="then"><strong>Then</strong> {{ ac.then }}</div>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        {% if req.functional_requirements %}
+        <div class="fr-list">
+            <strong>Functional Requirements:</strong>
+            <ul>
+            {% for fr in req.functional_requirements %}
+                <li>{{ fr.requirement }}</li>
+            {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+
+        {% for quote in req.source_quotes %}
+        <div class="source-quote">"{{ quote }}"</div>
+        {% endfor %}
+    </div>
+    {% endfor %}
+</div>
+
+{% elif requirements %}
+<div class="section">
+    <h1>Requirements</h1>
+    <p class="section-count">{{ requirements|length }} requirement(s) extracted</p>
+
+    {% for req in requirements %}
+    <div class="req-card">
+        <div class="card-header">{{ req.id }}: {{ req.user_story }}</div>
+        <div class="card-meta">
+            <strong>Role:</strong> {{ req.role or 'N/A' }} |
+            <strong>Priority:</strong> <span class="priority-{{ req.priority or 'medium' }}">{{ req.priority or 'N/A' }}</span> |
+            <span class="status-badge">{{ req.status or 'N/A' }}</span>
+        </div>
+        {% for quote in req.source_quotes %}
+        <div class="source-quote">"{{ quote }}"</div>
+        {% endfor %}
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+{% if action_items %}
+<div class="section">
+    <h1>Action Items</h1>
+    <p class="section-count">{{ action_items|length }} action item(s) extracted</p>
+
+    {% for item in action_items %}
+    <div class="action-card">
+        <div class="card-header">{{ item.id }}: {{ item.action }}</div>
+        <div class="card-meta">
+            <strong>Assignee:</strong> {{ item.assignee or 'Unassigned' }} |
+            <strong>Deadline:</strong> {{ item.deadline or 'Not specified' }} |
+            <strong>Priority:</strong> <span class="priority-{{ item.priority or 'medium' }}">{{ item.priority or 'N/A' }}</span> |
+            <span class="status-badge">{{ item.status or 'N/A' }}</span>
+        </div>
+        {% if item.dependencies %}
+        <div class="card-meta"><strong>Dependencies:</strong> {{ item.dependencies|join(', ') }}</div>
+        {% endif %}
+        {% for quote in item.source_quotes %}
+        <div class="source-quote">"{{ quote }}"</div>
+        {% endfor %}
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+{% if decisions %}
+<div class="section">
+    <h1>Decisions</h1>
+    <p class="section-count">{{ decisions|length }} decision(s) extracted</p>
+
+    {% for dec in decisions %}
+    <div class="decision-card">
+        <div class="card-header">{{ dec.id }}: {{ dec.decision }}</div>
+        <div class="card-meta">
+            <strong>Decision Maker:</strong> {{ dec.decision_maker or 'N/A' }} |
+            <span class="status-badge">{{ dec.status or 'N/A' }}</span>
+        </div>
+        {% if dec.rationale %}
+        <div class="card-meta"><strong>Rationale:</strong> {{ dec.rationale }}</div>
+        {% endif %}
+        {% if dec.impact %}
+        <div class="card-meta"><strong>Impact:</strong> {{ dec.impact }}</div>
+        {% endif %}
+        {% if dec.alternatives_considered %}
+        <div class="card-meta"><strong>Alternatives Considered:</strong> {{ dec.alternatives_considered|join(', ') }}</div>
+        {% endif %}
+        {% if dec.conditions %}
+        <div class="card-meta"><strong>Conditions:</strong> {{ dec.conditions }}</div>
+        {% endif %}
+        {% for quote in dec.source_quotes %}
+        <div class="source-quote">"{{ quote }}"</div>
+        {% endfor %}
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+{% if emphasis_points %}
+<div class="section">
+    <h1>Emphasis Points</h1>
+    <p class="section-count">{{ emphasis_points|length }} emphasis point(s) extracted</p>
+
+    {% for emp in emphasis_points %}
+    <div class="emphasis-card">
+        <div class="card-header">{{ emp.id }}: {{ emp.point }}</div>
+        <div class="card-meta">
+            <strong>Type:</strong> {{ emp.emphasis_type or 'N/A' }} |
+            <strong>Strength:</strong> {{ emp.strength or 'N/A' }}
+            {% if emp.speaker %} | <strong>Speaker:</strong> {{ emp.speaker }}{% endif %}
+        </div>
+        {% if emp.related_to %}
+        <div class="card-meta"><strong>Related To:</strong> {{ emp.related_to }}</div>
+        {% endif %}
+        {% for quote in emp.source_quotes %}
+        <div class="source-quote">"{{ quote }}"</div>
+        {% endfor %}
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+{% if validation %}
+<div class="section">
+    <h1>Validation Summary</h1>
+    <div class="validation-summary">
+        <p><strong>Recommendation:</strong> {{ validation.overall.recommendation|upper }}</p>
+        <p><strong>Fidelity Score:</strong> {{ "%.1f"|format(validation.overall.fidelity_score * 100) }}%</p>
+        <p><strong>Total Items:</strong> {{ validation.overall.total_items }} |
+           <strong>Valid:</strong> {{ validation.overall.valid }} |
+           <strong>Partial:</strong> {{ validation.overall.partial }} |
+           <strong>Invalid:</strong> {{ validation.overall.invalid }}</p>
+    </div>
+</div>
+{% endif %}
+
+{% endblock %}
