@@ -435,6 +435,17 @@ def validate_format(
         # Use clean project name to locate the project directory
         stem = clean_project_name(raw_filename)
         raw_file_path = config.SOURCE_DIR / raw_filename
+
+        # Prefer the validated version of the source file if it exists,
+        # since it contains corrections (e.g., fixed speaker names).
+        if "_validated" not in raw_filename:
+            ext = Path(raw_filename).suffix
+            validated_path = config.SOURCE_DIR / f"{stem}_validated{ext}"
+            if validated_path.exists():
+                raw_file_path = validated_path
+                if logger:
+                    logger.info("Using validated source for comparison: %s",
+                                validated_path.name)
         if formatted_filename:
             formatted_file_path = config.PROJECTS_DIR / stem / formatted_filename
         else:
@@ -458,6 +469,16 @@ def validate_format(
         )
         raw_clean = re.sub(r"^\s*Transcribed by\b.*", "",
                            raw_clean, flags=re.MULTILINE)
+
+        # Strip speaker labels in common meeting transcript formats
+        # (Teams, Zoom, Otter) e.g., "Derek Dickson  0:00", "Jane Smith  12:34:56"
+        # Must come before general timestamp stripping below.
+        raw_clean = re.sub(
+            r"^\s*[A-Z][a-zA-Z'-]+(?:\s+[A-Za-z][a-zA-Z'-]+)+\s+\d+:\d{2}(?::\d{2})?\s*$",
+            "",
+            raw_clean,
+            flags=re.MULTILINE,
+        )
 
         raw_clean = re.sub(
             r"[\[\(]?\b\d+:\d{2}(?::\d{2})?(?:[ap]m)?[\]\)]?",
@@ -495,6 +516,24 @@ def validate_format(
 
         formatted_clean = re.sub(
             r"^\s*#+.*$", "", formatted_clean, flags=re.MULTILINE)
+
+        # Extract speaker names from bold labels in formatted output
+        # (e.g., **Derek Dickson:**) and strip matching standalone lines
+        # from raw text.  This handles transcripts where speaker labels
+        # appear on their own line and get converted to bold labels.
+        speaker_names = set()
+        for match in re.finditer(r"\*\*([^*:]+):\*\*", formatted_text):
+            name = match.group(1).strip()
+            if len(name) > 2:
+                speaker_names.add(name)
+        for name in speaker_names:
+            escaped = re.escape(name)
+            raw_clean = re.sub(
+                rf"^\s*{escaped}\s*$",
+                "",
+                raw_clean,
+                flags=re.MULTILINE,
+            )
 
         skip_words = set()
         if skip_words_file:
