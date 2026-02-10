@@ -721,9 +721,12 @@ def parse_filename_metadata(filename: str) -> dict:
 
     Returns:
         Dictionary with title, presenter, author, date, year, and stem.
+        If filename doesn't match the expected pattern, falls back to
+        using the entire stem as the title (presenter/date will be empty).
 
     Raises:
-        ValueError: If filename doesn't match expected pattern or is unsafe
+        ValueError: If filename components are empty or date lacks a year
+                    (only when the pattern matches but values are invalid)
 
     Security:
         - Sanitizes filename to prevent directory traversal
@@ -754,8 +757,18 @@ def parse_filename_metadata(filename: str) -> dict:
     parts = [p.strip() for p in stem.split(' - ')]
 
     if len(parts) < 3:
-        raise ValueError(
-            f"Filename must follow pattern 'Title - Presenter - Date.ext', got: {safe_filename}")
+        # Filename doesn't match 'Title - Presenter - Date' pattern.
+        # Fall back: use the entire stem as the title.
+        year_match = re.search(r'(\d{4})', stem)
+        return {
+            "title": stem,
+            "presenter": "",
+            "author": "",
+            "date": "",
+            "year": year_match.group(1) if year_match else "",
+            "filename": safe_filename,
+            "stem": stem,
+        }
 
     # Handle case where title or presenter contains ' - '
     if len(parts) > 3:
