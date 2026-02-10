@@ -119,9 +119,13 @@ Some other content.
         self.assertEqual(metadata["date"], "2023-03-03")
         self.assertEqual(metadata["stem"], "Some Title - Some Presenter - 2023-03-03")
 
-    def test_parse_filename_metadata_invalid(self):
-        with self.assertRaises(ValueError):
-            parse_filename_metadata("invalid-filename.txt")
+    def test_parse_filename_metadata_fallback(self):
+        """Non-standard filenames should return fallback with stem as title."""
+        metadata = parse_filename_metadata("invalid-filename.txt")
+        self.assertEqual(metadata["title"], "invalid-filename")
+        self.assertEqual(metadata["stem"], "invalid-filename")
+        self.assertEqual(metadata["presenter"], "")
+        self.assertEqual(metadata["date"], "")
 
 if __name__ == '__main__':
     unittest.main()
